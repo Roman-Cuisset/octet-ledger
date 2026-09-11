@@ -264,7 +264,13 @@ static void PrintReport(IReadOnlyList<TrafficReportRow> rows)
         Console.WriteLine($"{row.Period,16} {Trim(row.InterfaceName, 24),-24} {ByteFormatter.Format(row.BytesReceived),12} " +
                           $"{ByteFormatter.Format(row.BytesSent),12} {ByteFormatter.Format(row.TotalBytes),12} " +
                           $"{ByteFormatter.FormatRate(row.AverageBytesPerSecond),14} {ByteFormatter.FormatRate(row.PeakBytesPerSecond),14}");
-    if (rows.Count == 0) Console.WriteLine("No stored traffic yet. Install the collector with 'octetledger collector install'.");
+    if (rows.Count == 0)
+    {
+        var collector = CollectorTaskManager.GetStatus();
+        Console.WriteLine(collector.State == "Running"
+            ? "No traffic interval has been recorded yet. The collector is running; try again in about one minute."
+            : "No stored traffic yet. Install the collector with 'octetledger collector install'.");
+    }
 }
 
 static int ManageCollector(string[] arguments)
