@@ -152,15 +152,23 @@ static async Task<int> MonitorAsync(string[] arguments)
     if (background && !CollectorTaskManager.TryClaimBackgroundProcess()) return 0;
     try
     {
-        using var store = new TrafficStore();
         using var cancellation = CreateCancellation();
         if (!quiet) Console.WriteLine($"Collecting every {interval:0.##} seconds. Press Ctrl+C to stop.");
         try
         {
             while (!cancellation.IsCancellationRequested)
             {
-                var result = store.Collect(NetworkInterfaceReader.ReadDistinct());
-                if (!quiet) Console.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}  ↓ {ByteFormatter.Format(result.BytesReceived),10}  ↑ {ByteFormatter.Format(result.BytesSent),10}");
+                try
+                {
+                    using var store = new TrafficStore();
+                    var result = store.Collect(NetworkInterfaceReader.ReadDistinct());
+                    if (background) CollectorTaskManager.MarkBackgroundReady();
+                    if (!quiet) Console.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}  ↓ {ByteFormatter.Format(result.BytesReceived),10}  ↑ {ByteFormatter.Format(result.BytesSent),10}");
+                }
+                catch (Exception exception) when (background)
+                {
+                    CollectorTaskManager.RecordBackgroundError(exception);
+                }
                 var remaining = TimeSpan.FromSeconds(interval);
                 while (remaining > TimeSpan.Zero && !cancellation.IsCancellationRequested)
                 {
@@ -264,12 +272,17 @@ static void PrintReport(IReadOnlyList<TrafficReportRow> rows)
         Console.WriteLine($"{row.Period,16} {Trim(row.InterfaceName, 24),-24} {ByteFormatter.Format(row.BytesReceived),12} " +
                           $"{ByteFormatter.Format(row.BytesSent),12} {ByteFormatter.Format(row.TotalBytes),12} " +
                           $"{ByteFormatter.FormatRate(row.AverageBytesPerSecond),14} {ByteFormatter.FormatRate(row.PeakBytesPerSecond),14}");
+    var collector = CollectorTaskManager.GetStatus();
     if (rows.Count == 0)
     {
-        var collector = CollectorTaskManager.GetStatus();
         Console.WriteLine(collector.State == "Running"
             ? "No traffic interval has been recorded yet. The collector is running; try again in about one minute."
             : "No stored traffic yet. Install the collector with 'octetledger collector install'.");
+    }
+    else if (collector.State != "Running")
+    {
+        Console.Error.WriteLine($"Warning: stored totals are not updating because the collector is {collector.State.ToLowerInvariant()}.");
+        Console.Error.WriteLine("Run 'octetledger collector start' to repair and restart it.");
     }
 }
 

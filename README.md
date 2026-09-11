@@ -62,6 +62,9 @@ rows are wanted; OctetLedger never merges those rows into a misleading grand tot
 
 The first collection creates a baseline. Traffic is recorded from the next sample onward. Data and
 settings live in `%LOCALAPPDATA%\OctetLedger`. Uninstalling the program preserves these files.
+If a stored report detects that automatic collection is stopped, it prints a warning and the repair
+command. Background collection retries transient errors and records them in `collector.log` instead
+of silently exiting.
 
 ## Build from source
 

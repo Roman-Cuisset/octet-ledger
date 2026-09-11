@@ -10,7 +10,7 @@
     <AssemblyName>octetledger</AssemblyName>
     <Product>OctetLedger</Product>
     <Description>Lightweight Windows network traffic statistics.</Description>
-    <Version>0.3.5</Version>
+    <Version>0.3.6</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <ImplicitUsings>enable</ImplicitUsings>
