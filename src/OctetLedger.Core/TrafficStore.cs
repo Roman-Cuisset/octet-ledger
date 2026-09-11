@@ -20,7 +20,7 @@ public sealed class TrafficStore : IDisposable
         {
             DataSource = DatabasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
+            Cache = SqliteCacheMode.Private,
             Pooling = false
         }.ToString());
         connection.Open();
@@ -195,8 +195,9 @@ public sealed class TrafficStore : IDisposable
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
+            PRAGMA journal_mode = DELETE;
+            PRAGMA synchronous = FULL;
+            PRAGMA busy_timeout = 5000;
             PRAGMA foreign_keys = ON;
 
             CREATE TABLE IF NOT EXISTS adapter_state (

@@ -15,9 +15,14 @@ public static class CollectorTaskManager
 
     public static CollectorTaskStatus GetStatus()
     {
-        var installed = Run("reg.exe", "query", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", StartupValueName).ExitCode == 0;
+        var registered = Run("reg.exe", "query", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", StartupValueName).ExitCode == 0;
+        var launcherExists = File.Exists(LauncherPath);
+        var installed = registered && launcherExists;
         var running = TryGetRunningProcess() is not null;
-        return new CollectorTaskStatus(installed, running ? "Running" : installed ? "Installed, stopped" : "Not installed");
+        var state = running
+            ? installed ? "Running" : "Running, startup repair needed"
+            : installed ? "Installed, stopped" : registered || launcherExists ? "Installation needs repair" : "Not installed";
+        return new CollectorTaskStatus(installed, state);
     }
 
     public static void Install(string executablePath)
@@ -36,7 +41,14 @@ public static class CollectorTaskManager
     public static void Start()
     {
         if (TryGetRunningProcess() is not null) return;
-        if (!File.Exists(LauncherPath)) throw new InvalidOperationException("Collector is not installed.");
+        var registered = Run("reg.exe", "query", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", StartupValueName).ExitCode == 0;
+        if (!File.Exists(LauncherPath) || !registered)
+        {
+            var executable = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable))
+                throw new InvalidOperationException("Collector installation could not be repaired automatically.");
+            Install(executable);
+        }
         TryDeleteStopFile();
         Process.Start(new ProcessStartInfo("wscript.exe", $"\"{LauncherPath}\"") { UseShellExecute = true });
         for (var attempt = 0; attempt < 50; attempt++)
