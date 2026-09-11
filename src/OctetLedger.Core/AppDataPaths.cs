@@ -7,4 +7,6 @@ public static class AppDataPaths
         "OctetLedger");
 
     public static string DatabasePath => Path.Combine(DataDirectory, "octetledger.db");
+
+    public static string SettingsPath => Path.Combine(DataDirectory, "settings.json");
 }

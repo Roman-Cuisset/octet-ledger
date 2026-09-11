@@ -64,6 +64,35 @@ public class TrafficStoreTests
         }
     }
 
+    [Fact]
+    public void CheckAndBackupProduceAHealthyIndependentDatabase()
+    {
+        var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(testDirectory, "source.db");
+        var backupPath = Path.Combine(testDirectory, "backup.db");
+
+        try
+        {
+            using (var store = new TrafficStore(databasePath))
+            {
+                store.Collect([Snapshot(1_000, 2_000, 0)]);
+                store.Collect([Snapshot(4_000, 3_500, 1)]);
+                Assert.True(store.CheckIntegrity().IsHealthy);
+                Assert.Equal(backupPath, store.Backup(backupPath));
+            }
+
+            using var backup = new TrafficStore(backupPath);
+            Assert.True(backup.CheckIntegrity().IsHealthy);
+            var bucket = Assert.Single(backup.ReadBuckets(DateTimeOffset.UnixEpoch));
+            Assert.Equal(3_000, bucket.BytesReceived);
+            Assert.Equal(1_500, bucket.BytesSent);
+        }
+        finally
+        {
+            if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
     private static NetworkInterfaceSnapshot Snapshot(long received, long sent, int minute)
     {
         return new NetworkInterfaceSnapshot(

@@ -118,6 +118,47 @@ public sealed class TrafficStore : IDisposable
             lastCollection);
     }
 
+    public DatabaseCheckResult CheckIntegrity()
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA integrity_check;";
+        using var reader = command.ExecuteReader();
+        var messages = new List<string>();
+        while (reader.Read())
+        {
+            messages.Add(reader.GetString(0));
+        }
+
+        return new DatabaseCheckResult(
+            messages.Count == 1 && string.Equals(messages[0], "ok", StringComparison.OrdinalIgnoreCase),
+            messages);
+    }
+
+    public string Backup(string destinationPath)
+    {
+        var fullPath = Path.GetFullPath(destinationPath);
+        if (string.Equals(fullPath, Path.GetFullPath(DatabasePath), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Backup destination must differ from the active database.", nameof(destinationPath));
+        }
+
+        var directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        using var destination = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = fullPath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false
+        }.ToString());
+        destination.Open();
+        connection.BackupDatabase(destination);
+        return fullPath;
+    }
+
     public void Dispose()
     {
         connection.Dispose();
@@ -228,3 +269,5 @@ public sealed class TrafficStore : IDisposable
         return value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
     }
 }
+
+public sealed record DatabaseCheckResult(bool IsHealthy, IReadOnlyList<string> Messages);

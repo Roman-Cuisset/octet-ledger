@@ -1,116 +1,118 @@
-using OctetLedger.Core;
+using System.Globalization;
 using System.Reflection;
+using OctetLedger.Core;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
-
 var command = args.FirstOrDefault()?.ToLowerInvariant() ?? "summary";
-var exitCode = command switch
+var rest = args.Skip(1).ToArray();
+return command switch
 {
-    "summary" => ShowSummary(),
-    "interfaces" or "iflist" => ShowInterfaces(args.Skip(1).ToArray()),
-    "live" => await ShowLiveAsync(args.Skip(1).ToArray()),
+    "summary" => ShowSummary(rest),
+    "interfaces" or "iflist" => ShowInterfaces(rest),
+    "interface" => ManageInterface(rest),
+    "live" => await ShowLiveAsync(rest),
     "collect" => CollectOnce(),
-    "monitor" => await MonitorAsync(args.Skip(1).ToArray()),
-    "daily" => ShowDaily(args.Skip(1).ToArray()),
-    "monthly" => ShowMonthly(args.Skip(1).ToArray()),
+    "monitor" => await MonitorAsync(rest),
+    "today" => ShowReport(ReportKind.Today, rest),
+    "hourly" => ShowReport(ReportKind.Hourly, rest),
+    "daily" => ShowReport(ReportKind.Daily, rest),
+    "weekly" => ShowReport(ReportKind.Weekly, rest),
+    "monthly" => ShowReport(ReportKind.Monthly, rest),
+    "top" => ShowReport(ReportKind.Top, rest),
+    "collector" => ManageCollector(rest),
+    "database" or "db" => ManageDatabase(rest),
     "status" => ShowStatus(),
     "help" or "--help" or "-h" => ShowHelp(),
     "version" or "--version" => ShowVersion(),
     _ => UnknownCommand(command)
 };
 
-return exitCode;
-
-static int ShowSummary()
+static int ShowSummary(string[] arguments)
 {
-    var interfaces = NetworkInterfaceReader.ReadDistinct()
-        .Where(snapshot =>
-            snapshot.Status == "Up" &&
-            snapshot.Type is not ("Loopback" or "Tunnel") &&
-            snapshot.BytesReceived + snapshot.BytesSent > 0)
-        .ToArray();
-
-    Console.WriteLine("OctetLedger — Windows network traffic statistics");
-    Console.WriteLine();
-
-    if (interfaces.Length == 0)
+    var selected = SelectSnapshots(NetworkInterfaceReader.ReadDistinct(), arguments);
+    if (selected is null) return 2;
+    Console.WriteLine("OctetLedger — Windows network traffic statistics\n");
+    if (selected.Count == 0)
     {
         Console.Error.WriteLine("No active network interface was found.");
         return 1;
     }
-
-    foreach (var snapshot in interfaces)
+    foreach (var snapshot in selected)
     {
         Console.WriteLine(snapshot.Name);
         Console.WriteLine($"  Received  {ByteFormatter.Format(snapshot.BytesReceived),12}");
         Console.WriteLine($"  Sent      {ByteFormatter.Format(snapshot.BytesSent),12}");
         Console.WriteLine($"  Total     {ByteFormatter.Format(snapshot.BytesReceived + snapshot.BytesSent),12}");
     }
-
-    Console.WriteLine();
-    Console.WriteLine("Counters shown here are cumulative since Windows started the interface.");
+    Console.WriteLine("\nCounters are cumulative since Windows started the interface.");
+    Console.WriteLine("Use 'octetledger today' for traffic recorded by OctetLedger today.");
     return 0;
 }
 
 static int ShowInterfaces(string[] arguments)
 {
-    var interfaces = arguments.Contains("--all", StringComparer.OrdinalIgnoreCase)
-        ? NetworkInterfaceReader.ReadAll()
-        : NetworkInterfaceReader.ReadDistinct();
-    Console.WriteLine($"{"Status",-8} {"Name",-28} {"Type",-18} {"Received",12} {"Sent",12}");
-    Console.WriteLine(new string('-', 84));
-
+    var interfaces = HasFlag(arguments, "--all") ? NetworkInterfaceReader.ReadAll() : NetworkInterfaceReader.ReadDistinct();
+    var preferred = OctetLedgerSettings.Load().PreferredInterfaceId;
+    Console.WriteLine($"{"Default",-7} {"Status",-10} {"Name",-28} {"Type",-18} {"Received",12} {"Sent",12}");
+    Console.WriteLine(new string('-', 94));
     foreach (var snapshot in interfaces)
     {
-        Console.WriteLine(
-            $"{snapshot.Status,-8} {Trim(snapshot.Name, 28),-28} {Trim(snapshot.Type, 18),-18} " +
-            $"{ByteFormatter.Format(snapshot.BytesReceived),12} {ByteFormatter.Format(snapshot.BytesSent),12}");
+        var marker = string.Equals(snapshot.Id, preferred, StringComparison.OrdinalIgnoreCase) ? "*" : "";
+        Console.WriteLine($"{marker,-7} {snapshot.Status,-10} {Trim(snapshot.Name, 28),-28} {Trim(snapshot.Type, 18),-18} " +
+                          $"{ByteFormatter.Format(snapshot.BytesReceived),12} {ByteFormatter.Format(snapshot.BytesSent),12}");
     }
-
     return 0;
+}
+
+static int ManageInterface(string[] arguments)
+{
+    var action = arguments.FirstOrDefault()?.ToLowerInvariant() ?? "show";
+    var settings = OctetLedgerSettings.Load();
+    var snapshots = NetworkInterfaceReader.ReadDistinct();
+    switch (action)
+    {
+        case "show":
+            var selected = NetworkInterfaceSelector.SelectPrimary(snapshots, settings.PreferredInterfaceId);
+            if (selected is null) { Console.Error.WriteLine("No active network interface was found."); return 1; }
+            Console.WriteLine($"Default interface: {selected.Name}");
+            Console.WriteLine(settings.PreferredInterfaceId is null ? "Selection: automatic" : "Selection: saved by user");
+            return 0;
+        case "set":
+            var selector = string.Join(' ', arguments.Skip(1));
+            if (string.IsNullOrWhiteSpace(selector)) { Console.Error.WriteLine("Usage: octetledger interface set <name-or-id>"); return 2; }
+            var match = NetworkInterfaceSelector.Resolve(snapshots, selector);
+            if (match is null) { Console.Error.WriteLine($"Interface '{selector}' was not found."); return 1; }
+            new OctetLedgerSettings(match.Id).Save();
+            Console.WriteLine($"Default interface set to: {match.Name}");
+            return 0;
+        case "clear":
+            new OctetLedgerSettings().Save();
+            Console.WriteLine("Default interface selection is now automatic.");
+            return 0;
+        default:
+            Console.Error.WriteLine("Usage: octetledger interface [show|set <name-or-id>|clear]");
+            return 2;
+    }
 }
 
 static async Task<int> ShowLiveAsync(string[] arguments)
 {
-    var selector = ReadOption(arguments, "--interface") ?? ReadOption(arguments, "-i");
     var intervalText = ReadOption(arguments, "--interval") ?? "1";
-
-    if (!double.TryParse(intervalText, System.Globalization.CultureInfo.InvariantCulture, out var interval) ||
-        interval < 0.2 || interval > 60)
-    {
-        Console.Error.WriteLine("--interval must be between 0.2 and 60 seconds.");
-        return 2;
-    }
-
+    if (!double.TryParse(intervalText, CultureInfo.InvariantCulture, out var interval) || interval is < 0.2 or > 60)
+    { Console.Error.WriteLine("--interval must be between 0.2 and 60 seconds."); return 2; }
+    var snapshots = NetworkInterfaceReader.ReadDistinct();
+    var selector = ReadOption(arguments, "--interface") ?? ReadOption(arguments, "-i");
     var first = selector is null
-        ? NetworkInterfaceReader.ReadDistinct()
-            .Where(snapshot =>
-                snapshot.Status == "Up" &&
-                snapshot.Type is not ("Loopback" or "Tunnel") &&
-                snapshot.BytesReceived + snapshot.BytesSent > 0)
-            .OrderByDescending(snapshot => snapshot.Type is "Wireless80211" or "Ethernet")
-            .ThenByDescending(snapshot => snapshot.BytesReceived + snapshot.BytesSent)
-            .FirstOrDefault()
-        : NetworkInterfaceReader.Find(selector);
-
+        ? NetworkInterfaceSelector.SelectPrimary(snapshots, OctetLedgerSettings.Load().PreferredInterfaceId)
+        : NetworkInterfaceSelector.Resolve(snapshots, selector);
     if (first is null)
     {
-        Console.Error.WriteLine(selector is null
-            ? "No active network interface was found."
-            : $"Interface '{selector}' was not found. Run 'octetledger interfaces' to list interfaces.");
+        Console.Error.WriteLine(selector is null ? "No active network interface was found." : $"Interface '{selector}' was not found.");
         return 1;
     }
-
     Console.WriteLine($"Live traffic on {first.Name}. Press Ctrl+C to stop.");
     Console.WriteLine($"{"Time",10} {"Download",16} {"Upload",16} {"Total",16}");
-
-    using var cancellation = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, eventArgs) =>
-    {
-        eventArgs.Cancel = true;
-        cancellation.Cancel();
-    };
-
+    using var cancellation = CreateCancellation();
     var previous = first;
     try
     {
@@ -118,26 +120,14 @@ static async Task<int> ShowLiveAsync(string[] arguments)
         {
             await Task.Delay(TimeSpan.FromSeconds(interval), cancellation.Token);
             var current = NetworkInterfaceReader.Find(previous.Id);
-            if (current is null)
-            {
-                Console.Error.WriteLine("The selected interface is no longer available.");
-                return 1;
-            }
-
+            if (current is null) { Console.Error.WriteLine("The selected interface is no longer available."); return 1; }
             var rate = TrafficRateCalculator.Calculate(previous, current);
-            Console.WriteLine(
-                $"{current.CapturedAt:HH:mm:ss} " +
-                $"{ByteFormatter.FormatRate(rate.ReceivedBytesPerSecond),16} " +
-                $"{ByteFormatter.FormatRate(rate.SentBytesPerSecond),16} " +
-                $"{ByteFormatter.FormatRate(rate.TotalBytesPerSecond),16}");
+            Console.WriteLine($"{current.CapturedAt:HH:mm:ss} {ByteFormatter.FormatRate(rate.ReceivedBytesPerSecond),16} " +
+                              $"{ByteFormatter.FormatRate(rate.SentBytesPerSecond),16} {ByteFormatter.FormatRate(rate.TotalBytesPerSecond),16}");
             previous = current;
         }
     }
-    catch (OperationCanceledException)
-    {
-        // Normal Ctrl+C shutdown.
-    }
-
+    catch (OperationCanceledException) { }
     return 0;
 }
 
@@ -145,167 +135,188 @@ static int CollectOnce()
 {
     using var store = new TrafficStore();
     var result = store.Collect(NetworkInterfaceReader.ReadDistinct());
-    Console.WriteLine(
-        $"Collected {result.InterfacesObserved} interfaces: " +
-        $"{ByteFormatter.Format(result.BytesReceived)} received, " +
-        $"{ByteFormatter.Format(result.BytesSent)} sent.");
-
-    if (result.BaselinesCreated > 0)
-    {
-        Console.WriteLine($"Initialized {result.BaselinesCreated} new interface baselines.");
-    }
-
+    Console.WriteLine($"Collected {result.InterfacesObserved} interfaces: {ByteFormatter.Format(result.BytesReceived)} received, " +
+                      $"{ByteFormatter.Format(result.BytesSent)} sent.");
+    if (result.BaselinesCreated > 0) Console.WriteLine($"Initialized {result.BaselinesCreated} new interface baselines.");
     return 0;
 }
 
 static async Task<int> MonitorAsync(string[] arguments)
 {
     var intervalText = ReadOption(arguments, "--interval") ?? "60";
-    if (!double.TryParse(intervalText, System.Globalization.CultureInfo.InvariantCulture, out var interval) ||
-        interval < 1 || interval > 3600)
-    {
-        Console.Error.WriteLine("--interval must be between 1 and 3600 seconds.");
-        return 2;
-    }
-
-    using var store = new TrafficStore();
-    using var cancellation = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, eventArgs) =>
-    {
-        eventArgs.Cancel = true;
-        cancellation.Cancel();
-    };
-
-    Console.WriteLine($"Collecting every {interval:0.##} seconds. Press Ctrl+C to stop.");
+    if (!double.TryParse(intervalText, CultureInfo.InvariantCulture, out var interval) || interval is < 1 or > 3600)
+    { Console.Error.WriteLine("--interval must be between 1 and 3600 seconds."); return 2; }
+    var quiet = HasFlag(arguments, "--quiet");
+    var background = HasFlag(arguments, "--background");
+    if (background && !CollectorTaskManager.TryClaimBackgroundProcess()) return 0;
     try
     {
-        while (!cancellation.IsCancellationRequested)
+        using var store = new TrafficStore();
+        using var cancellation = CreateCancellation();
+        if (!quiet) Console.WriteLine($"Collecting every {interval:0.##} seconds. Press Ctrl+C to stop.");
+        try
         {
-            var result = store.Collect(NetworkInterfaceReader.ReadDistinct());
-            Console.WriteLine(
-                $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}  " +
-                $"↓ {ByteFormatter.Format(result.BytesReceived),10}  " +
-                $"↑ {ByteFormatter.Format(result.BytesSent),10}");
-            await Task.Delay(TimeSpan.FromSeconds(interval), cancellation.Token);
+            while (!cancellation.IsCancellationRequested)
+            {
+                var result = store.Collect(NetworkInterfaceReader.ReadDistinct());
+                if (!quiet) Console.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}  ↓ {ByteFormatter.Format(result.BytesReceived),10}  ↑ {ByteFormatter.Format(result.BytesSent),10}");
+                await Task.Delay(TimeSpan.FromSeconds(interval), cancellation.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        return 0;
+    }
+    finally
+    {
+        if (background) CollectorTaskManager.ReleaseBackgroundProcess();
+    }
+}
+
+static int ShowReport(ReportKind kind, string[] arguments)
+{
+    var now = DateTimeOffset.Now;
+    int? count;
+    DateTimeOffset startLocal;
+    switch (kind)
+    {
+        case ReportKind.Today:
+            count = 1; startLocal = new DateTimeOffset(now.Date, now.Offset); break;
+        case ReportKind.Hourly:
+            count = ReadPositiveInteger(arguments, "--hours", 24, 1, 744);
+            startLocal = new DateTimeOffset(now.Year, now.Month, now.Day, now.Hour, 0, 0, now.Offset).AddHours(-(count.GetValueOrDefault() - 1)); break;
+        case ReportKind.Daily:
+            count = ReadPositiveInteger(arguments, "--days", 30, 1, 3660);
+            startLocal = new DateTimeOffset(now.Date, now.Offset).AddDays(-(count.GetValueOrDefault() - 1)); break;
+        case ReportKind.Weekly:
+            count = ReadPositiveInteger(arguments, "--weeks", 12, 1, 520);
+            var monday = now.Date.AddDays(-(((int)now.DayOfWeek + 6) % 7));
+            startLocal = new DateTimeOffset(monday, now.Offset).AddDays(-7 * (count.GetValueOrDefault() - 1)); break;
+        case ReportKind.Monthly:
+            count = ReadPositiveInteger(arguments, "--months", 12, 1, 120);
+            startLocal = new DateTimeOffset(now.Year, now.Month, 1, 0, 0, 0, now.Offset).AddMonths(-(count.GetValueOrDefault() - 1)); break;
+        default:
+            count = ReadPositiveInteger(arguments, "--days", 10, 1, 1000);
+            startLocal = new DateTimeOffset(now.Date, now.Offset).AddYears(-10); break;
+    }
+    if (count is null) return 2;
+    using var store = new TrafficStore();
+    var buckets = store.ReadBuckets(startLocal.ToUniversalTime());
+    IReadOnlyList<TrafficReportRow> rows = kind switch
+    {
+        ReportKind.Today => TrafficReport.Daily(buckets),
+        ReportKind.Hourly => TrafficReport.Hourly(buckets),
+        ReportKind.Daily => TrafficReport.Daily(buckets),
+        ReportKind.Weekly => TrafficReport.Weekly(buckets),
+        ReportKind.Monthly => TrafficReport.Monthly(buckets),
+        _ => TrafficReport.TopDays(buckets, count.Value)
+    };
+    rows = FilterReportInterfaces(rows, arguments);
+    if (HasFlag(arguments, "--json")) { Console.WriteLine(TrafficReportExporter.ToJson(rows)); return 0; }
+    var csvPath = ReadOption(arguments, "--csv");
+    if (csvPath is not null)
+    {
+        TrafficReportExporter.WriteCsv(csvPath, rows);
+        Console.WriteLine($"CSV saved to: {Path.GetFullPath(csvPath)}");
+        return 0;
+    }
+    PrintReport(rows);
+    return 0;
+}
+
+static IReadOnlyList<TrafficReportRow> FilterReportInterfaces(IReadOnlyList<TrafficReportRow> rows, string[] arguments)
+{
+    if (HasFlag(arguments, "--all") || rows.Count == 0) return rows;
+    var selector = ReadOption(arguments, "--interface") ?? ReadOption(arguments, "-i");
+    string? id;
+    if (selector is not null)
+    {
+        id = rows.FirstOrDefault(row => string.Equals(row.InterfaceId, selector, StringComparison.OrdinalIgnoreCase) ||
+                                      string.Equals(row.InterfaceName, selector, StringComparison.OrdinalIgnoreCase))?.InterfaceId;
+        if (id is null) { Console.Error.WriteLine($"Stored interface '{selector}' was not found in this period."); return []; }
+    }
+    else
+    {
+        var preferred = OctetLedgerSettings.Load().PreferredInterfaceId;
+        id = rows.Any(row => string.Equals(row.InterfaceId, preferred, StringComparison.OrdinalIgnoreCase))
+            ? preferred
+            : NetworkInterfaceSelector.SelectPrimary(NetworkInterfaceReader.ReadDistinct(), preferred)?.Id;
+        id ??= rows.GroupBy(row => row.InterfaceId).OrderByDescending(group => group.Sum(row => row.TotalBytes)).First().Key;
+    }
+    return rows.Where(row => string.Equals(row.InterfaceId, id, StringComparison.OrdinalIgnoreCase)).ToArray();
+}
+
+static void PrintReport(IReadOnlyList<TrafficReportRow> rows)
+{
+    Console.WriteLine($"{"Period",16} {"Interface",-24} {"Received",12} {"Sent",12} {"Total",12} {"Average",14} {"Peak",14}");
+    Console.WriteLine(new string('-', 112));
+    foreach (var row in rows)
+        Console.WriteLine($"{row.Period,16} {Trim(row.InterfaceName, 24),-24} {ByteFormatter.Format(row.BytesReceived),12} " +
+                          $"{ByteFormatter.Format(row.BytesSent),12} {ByteFormatter.Format(row.TotalBytes),12} " +
+                          $"{ByteFormatter.FormatRate(row.AverageBytesPerSecond),14} {ByteFormatter.FormatRate(row.PeakBytesPerSecond),14}");
+    if (rows.Count == 0) Console.WriteLine("No stored traffic yet. Install the collector with 'octetledger collector install'.");
+}
+
+static int ManageCollector(string[] arguments)
+{
+    var action = arguments.FirstOrDefault()?.ToLowerInvariant() ?? "status";
+    try
+    {
+        switch (action)
+        {
+            case "install":
+                var executable = Environment.ProcessPath;
+                if (string.IsNullOrEmpty(executable) || !string.Equals(Path.GetFileName(executable), "octetledger.exe", StringComparison.OrdinalIgnoreCase))
+                { Console.Error.WriteLine("Install the packaged octetledger.exe first, then run this command."); return 1; }
+                CollectorTaskManager.Install(executable);
+                CollectorTaskManager.Start();
+                Console.WriteLine("Automatic collection installed and started (every 60 seconds).");
+                return 0;
+            case "status":
+                var status = CollectorTaskManager.GetStatus(); Console.WriteLine($"Collector: {status.State}"); return status.Installed ? 0 : 1;
+            case "start": CollectorTaskManager.Start(); Console.WriteLine("Collector started."); return 0;
+            case "stop": CollectorTaskManager.Stop(); Console.WriteLine("Collector stopped."); return 0;
+            case "uninstall": CollectorTaskManager.Uninstall(); Console.WriteLine("Automatic collector removed. Stored statistics were preserved."); return 0;
+            default: Console.Error.WriteLine("Usage: octetledger collector [install|status|start|stop|uninstall]"); return 2;
         }
     }
-    catch (OperationCanceledException)
-    {
-        // Normal Ctrl+C shutdown.
-    }
-
-    return 0;
+    catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+    { Console.Error.WriteLine(exception.Message); return 1; }
 }
 
-static int ShowDaily(string[] arguments)
+static int ManageDatabase(string[] arguments)
 {
-    var days = ReadPositiveInteger(arguments, "--days", 30, 1, 366);
-    if (days is null)
-    {
-        return 2;
-    }
-
+    var action = arguments.FirstOrDefault()?.ToLowerInvariant() ?? "check";
     using var store = new TrafficStore();
-    var startLocal = DateTimeOffset.Now.Date.AddDays(-(days.Value - 1));
-    var buckets = store.ReadBuckets(startLocal.ToUniversalTime());
-    var rows = buckets
-        .GroupBy(bucket => new
-        {
-            Day = bucket.MinuteUtc.ToLocalTime().Date,
-            bucket.InterfaceId,
-            bucket.InterfaceName
-        })
-        .Select(group => new
-        {
-            group.Key.Day,
-            group.Key.InterfaceName,
-            Received = group.Sum(bucket => bucket.BytesReceived),
-            Sent = group.Sum(bucket => bucket.BytesSent)
-        })
-        .OrderByDescending(row => row.Day)
-        .ThenBy(row => row.InterfaceName, StringComparer.OrdinalIgnoreCase)
-        .ToArray();
-
-    Console.WriteLine($"{"Date",12} {"Interface",-24} {"Received",12} {"Sent",12} {"Total",12}");
-    Console.WriteLine(new string('-', 78));
-    foreach (var row in rows)
+    switch (action)
     {
-        Console.WriteLine(
-            $"{row.Day:yyyy-MM-dd}  {Trim(row.InterfaceName, 24),-24} " +
-            $"{ByteFormatter.Format(row.Received),12} {ByteFormatter.Format(row.Sent),12} " +
-            $"{ByteFormatter.Format(row.Received + row.Sent),12}");
+        case "check":
+            var result = store.CheckIntegrity();
+            Console.WriteLine(result.IsHealthy ? "Database integrity: OK" : "Database integrity: FAILED");
+            if (!result.IsHealthy) foreach (var message in result.Messages) Console.WriteLine($"  {message}");
+            return result.IsHealthy ? 0 : 1;
+        case "backup":
+            var destination = arguments.Skip(1).FirstOrDefault() ?? Path.Combine(Environment.CurrentDirectory, $"OctetLedger-backup-{DateTime.Now:yyyyMMdd-HHmmss}.db");
+            Console.WriteLine($"Database backup created: {store.Backup(destination)}");
+            return 0;
+        default: Console.Error.WriteLine("Usage: octetledger database [check|backup [path]]"); return 2;
     }
-
-    if (rows.Length == 0)
-    {
-        Console.WriteLine("No stored traffic yet. Run 'octetledger monitor' to start collecting.");
-    }
-
-    return 0;
-}
-
-static int ShowMonthly(string[] arguments)
-{
-    var months = ReadPositiveInteger(arguments, "--months", 12, 1, 120);
-    if (months is null)
-    {
-        return 2;
-    }
-
-    var now = DateTimeOffset.Now;
-    var startLocal = new DateTimeOffset(now.Year, now.Month, 1, 0, 0, 0, now.Offset)
-        .AddMonths(-(months.Value - 1));
-    using var store = new TrafficStore();
-    var rows = store.ReadBuckets(startLocal.ToUniversalTime())
-        .GroupBy(bucket => new
-        {
-            Month = bucket.MinuteUtc.ToLocalTime().ToString(
-                "yyyy-MM",
-                System.Globalization.CultureInfo.InvariantCulture),
-            bucket.InterfaceId,
-            bucket.InterfaceName
-        })
-        .Select(group => new
-        {
-            group.Key.Month,
-            group.Key.InterfaceName,
-            Received = group.Sum(bucket => bucket.BytesReceived),
-            Sent = group.Sum(bucket => bucket.BytesSent)
-        })
-        .OrderByDescending(row => row.Month, StringComparer.Ordinal)
-        .ThenBy(row => row.InterfaceName, StringComparer.OrdinalIgnoreCase)
-        .ToArray();
-
-    Console.WriteLine($"{"Month",10} {"Interface",-24} {"Received",12} {"Sent",12} {"Total",12}");
-    Console.WriteLine(new string('-', 76));
-    foreach (var row in rows)
-    {
-        Console.WriteLine(
-            $"{row.Month,10} {Trim(row.InterfaceName, 24),-24} " +
-            $"{ByteFormatter.Format(row.Received),12} {ByteFormatter.Format(row.Sent),12} " +
-            $"{ByteFormatter.Format(row.Received + row.Sent),12}");
-    }
-
-    if (rows.Length == 0)
-    {
-        Console.WriteLine("No stored traffic yet. Run 'octetledger monitor' to start collecting.");
-    }
-
-    return 0;
 }
 
 static int ShowStatus()
 {
     using var store = new TrafficStore();
     var status = store.GetStatus();
-    Console.WriteLine("OctetLedger database");
-    Console.WriteLine($"  Path               {status.DatabasePath}");
-    Console.WriteLine($"  Size               {ByteFormatter.Format(status.DatabaseBytes)}");
+    var collector = CollectorTaskManager.GetStatus();
+    var settings = OctetLedgerSettings.Load();
+    var selected = NetworkInterfaceSelector.SelectPrimary(NetworkInterfaceReader.ReadDistinct(), settings.PreferredInterfaceId);
+    Console.WriteLine("OctetLedger status");
+    Console.WriteLine($"  Database           {status.DatabasePath}");
+    Console.WriteLine($"  Database size      {ByteFormatter.Format(status.DatabaseBytes)}");
     Console.WriteLine($"  Tracked interfaces {status.TrackedInterfaces}");
     Console.WriteLine($"  Stored minutes     {status.StoredMinutes}");
-    Console.WriteLine(
-        $"  Last collection    " +
-        $"{(status.LastCollectionUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) ?? "never")}");
+    Console.WriteLine($"  Last collection    {status.LastCollectionUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "never"}");
+    Console.WriteLine($"  Default interface  {selected?.Name ?? "none"}");
+    Console.WriteLine($"  Collector          {collector.State}");
     return 0;
 }
 
@@ -315,75 +326,64 @@ static int ShowHelp()
         OctetLedger — lightweight Windows network traffic statistics
 
         Usage:
-          octetledger [summary]
+          octetledger [summary] [--interface <name-or-id> | --all]
           octetledger interfaces [--all]
+          octetledger interface [show|set <name-or-id>|clear]
           octetledger live [--interface <name-or-id>] [--interval <seconds>]
-          octetledger collect
-          octetledger monitor [--interval <seconds>]
-          octetledger daily [--days <count>]
-          octetledger monthly [--months <count>]
-          octetledger status
-          octetledger version
+          octetledger today|hourly|daily|weekly|monthly|top [options]
+          octetledger collector [install|status|start|stop|uninstall]
+          octetledger database [check|backup [path]]
+          octetledger status|version|help
 
-        Commands:
-          summary      Show cumulative counters for active interfaces (default)
-          interfaces   List Windows network interfaces (--all includes driver bindings)
-          live         Show current download and upload rates
-          collect      Save one counter sample to the local database
-          monitor      Collect continuously (60-second interval by default)
-          daily        Show stored daily totals for each interface
-          monthly      Show stored monthly totals for each interface
-          status       Show the database path and collection status
-          version      Show the application version
+        Report options:
+          --hours N, --days N, --weeks N, --months N
+          --interface <name-or-id>   Choose one stored interface
+          --all                      Include every interface (may double-count VPN traffic)
+          --json                     Print machine-readable JSON
+          --csv <path>               Save CSV data
+
+        Reports use one primary interface by default to avoid VPN double counting.
         """);
     return 0;
 }
 
 static int ShowVersion()
 {
-    var version = Assembly.GetEntryAssembly()?
-        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-        .InformationalVersion.Split('+')[0] ?? "unknown";
-    Console.WriteLine($"OctetLedger {version}");
-    return 0;
+    var version = Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "unknown";
+    Console.WriteLine($"OctetLedger {version}"); return 0;
 }
 
-static int UnknownCommand(string command)
+static int UnknownCommand(string command) { Console.Error.WriteLine($"Unknown command '{command}'. Run 'octetledger help'."); return 2; }
+
+static IReadOnlyList<NetworkInterfaceSnapshot>? SelectSnapshots(IReadOnlyList<NetworkInterfaceSnapshot> snapshots, string[] arguments)
 {
-    Console.Error.WriteLine($"Unknown command '{command}'. Run 'octetledger help'.");
-    return 2;
+    if (HasFlag(arguments, "--all")) return snapshots.Where(snapshot => snapshot.Status == "Up" && snapshot.Type is not ("Loopback" or "Tunnel")).ToArray();
+    var selector = ReadOption(arguments, "--interface") ?? ReadOption(arguments, "-i");
+    var match = selector is null ? NetworkInterfaceSelector.SelectPrimary(snapshots, OctetLedgerSettings.Load().PreferredInterfaceId) : NetworkInterfaceSelector.Resolve(snapshots, selector);
+    if (selector is not null && match is null) { Console.Error.WriteLine($"Interface '{selector}' was not found."); return null; }
+    return match is null ? [] : [match];
 }
 
+static CancellationTokenSource CreateCancellation()
+{
+    var cancellation = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, eventArgs) => { eventArgs.Cancel = true; cancellation.Cancel(); };
+    return cancellation;
+}
+
+static bool HasFlag(string[] arguments, string flag) => arguments.Contains(flag, StringComparer.OrdinalIgnoreCase);
 static string? ReadOption(string[] arguments, string option)
 {
-    var index = Array.FindIndex(arguments, value =>
-        string.Equals(value, option, StringComparison.OrdinalIgnoreCase));
+    var index = Array.FindIndex(arguments, value => string.Equals(value, option, StringComparison.OrdinalIgnoreCase));
     return index >= 0 && index + 1 < arguments.Length ? arguments[index + 1] : null;
 }
-
-static int? ReadPositiveInteger(
-    string[] arguments,
-    string option,
-    int defaultValue,
-    int minimum,
-    int maximum)
+static int? ReadPositiveInteger(string[] arguments, string option, int defaultValue, int minimum, int maximum)
 {
     var text = ReadOption(arguments, option);
-    if (text is null)
-    {
-        return defaultValue;
-    }
-
-    if (int.TryParse(text, out var value) && value >= minimum && value <= maximum)
-    {
-        return value;
-    }
-
-    Console.Error.WriteLine($"{option} must be between {minimum} and {maximum}.");
-    return null;
+    if (text is null) return defaultValue;
+    if (int.TryParse(text, out var value) && value >= minimum && value <= maximum) return value;
+    Console.Error.WriteLine($"{option} must be between {minimum} and {maximum}."); return null;
 }
+static string Trim(string value, int maximumLength) => value.Length <= maximumLength ? value : $"{value[..(maximumLength - 1)]}…";
 
-static string Trim(string value, int maximumLength)
-{
-    return value.Length <= maximumLength ? value : $"{value[..(maximumLength - 1)]}…";
-}
+enum ReportKind { Today, Hourly, Daily, Weekly, Monthly, Top }

@@ -5,12 +5,15 @@ param(
 
     [string]$Executable,
 
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+
+    [ValidateSet('win-x64', 'win-arm64')]
+    [string]$Runtime = 'win-x64'
 )
 
 $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($Executable)) {
-    $Executable = Join-Path $PSScriptRoot '..\artifacts\win-x64\octetledger.exe'
+    $Executable = Join-Path $PSScriptRoot "..\artifacts\$Runtime\octetledger.exe"
 }
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $PSScriptRoot '..\artifacts\packages'
@@ -18,7 +21,7 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 
 $resolvedExecutable = (Resolve-Path -LiteralPath $Executable).Path
 $resolvedOutput = [System.IO.Path]::GetFullPath($OutputDirectory)
-$packageName = "OctetLedger-$Version-win-x64"
+$packageName = "OctetLedger-$Version-$Runtime"
 $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $stagingRoot = Join-Path $temporaryRoot ("octetledger-package-" + [Guid]::NewGuid().ToString('N'))
 $packageDirectory = Join-Path $stagingRoot $packageName
@@ -35,6 +38,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall.ps1') -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall.cmd') -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\README.md') -Destination $packageDirectory
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\LICENSE') -Destination $packageDirectory
 
     if (Test-Path -LiteralPath $archivePath) {
         Remove-Item -LiteralPath $archivePath -Force

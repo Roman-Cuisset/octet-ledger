@@ -1,80 +1,88 @@
 # OctetLedger
 
-OctetLedger is a lightweight, privacy-friendly network traffic statistics tool for Windows.
-It reads operating-system counters instead of capturing packets, then stores counter differences
-in a local SQLite database.
+OctetLedger is a lightweight, privacy-friendly Windows network traffic statistics tool inspired
+by vnStat. It reads Windows interface counters instead of capturing packets, and stores only
+counter differences in a local SQLite database.
 
-## Current commands
+## Install
 
-```powershell
-octetledger                       # Current counters for active interfaces
-octetledger interfaces            # Useful Windows interfaces
-octetledger interfaces --all      # Include filter-driver bindings
-octetledger live                  # Live download and upload rates
-octetledger collect               # Store one sample
-octetledger monitor               # Collect continuously every 60 seconds
-octetledger daily                 # Daily totals for the last 30 days
-octetledger monthly               # Monthly totals for the last 12 months
-octetledger status                # Database and collection status
-octetledger version
-octetledger help
-```
+Download the x64 or ARM64 ZIP from GitHub Releases, extract it, and run `install.cmd`. The installer
+needs no administrator privileges, adds `octetledger` to the user PATH, and starts an invisible
+collector every 60 seconds through the current user's Windows startup configuration.
 
-The first `collect` or `monitor` sample creates a baseline. Traffic is recorded from the next
-sample onward. Data is stored in `%LOCALAPPDATA%\OctetLedger\octetledger.db`.
-
-## Install the command
-
-For a packaged release on another PC:
-
-1. Download and extract `OctetLedger-<version>-win-x64.zip`.
-2. Double-click `install.cmd`.
-3. Open a new PowerShell or Command Prompt window.
-4. Run `octetledger`.
-
-When working from the source repository, run:
+Once the WinGet package is accepted, these commands will also work:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+winget install --id RomanCuisset.OctetLedger --exact
+winget install octetledger
 ```
 
-Open a new terminal and run `octetledger`. The installer copies the executable to
-`%LOCALAPPDATA%\Programs\OctetLedger` and adds that directory to the user `PATH`.
-No administrator privileges are required. To remove the command while preserving collected data:
+For a WinGet portable installation, start background collection once with:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1
+octetledger collector install
 ```
 
-## Install the command
-
-After publishing, install the command for the current Windows user:
+## Commands
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+octetledger                              # Primary interface counters
+octetledger summary --all                # All active interfaces
+octetledger interfaces                   # List interfaces
+octetledger interface set "Wi-Fi"        # Save the default interface
+octetledger live                         # Real-time rates
+
+octetledger today                        # Today's stored traffic
+octetledger hourly --hours 24
+octetledger daily --days 30
+octetledger weekly --weeks 12
+octetledger monthly --months 12
+octetledger top --days 10
+
+octetledger daily --json
+octetledger monthly --csv report.csv
+octetledger daily --all                  # Explicitly include every interface
+
+octetledger collector status
+octetledger collector install
+octetledger collector stop
+octetledger collector start
+octetledger collector uninstall
+
+octetledger database check
+octetledger database backup
+octetledger database backup D:\Backups\octetledger.db
+octetledger status
 ```
 
-Open a new terminal and run `octetledger`. No administrator rights are required. To remove the
-installed command without deleting the traffic database, run `scripts\uninstall.ps1`.
+Reports select one primary physical interface by default, which avoids silently adding the same
+traffic once for Wi-Fi/Ethernet and again for a VPN. Use `--all` only when separate per-interface
+rows are wanted; OctetLedger never merges those rows into a misleading grand total.
+
+The first collection creates a baseline. Traffic is recorded from the next sample onward. Data and
+settings live in `%LOCALAPPDATA%\OctetLedger`. Uninstalling the program preserves these files.
 
 ## Build from source
 
 The project targets .NET 10:
 
 ```powershell
-dotnet build --configuration Release
-dotnet test --configuration Release
+dotnet restore
+dotnet build --configuration Release --no-restore
+dotnet test --configuration Release --no-build
 dotnet publish src/OctetLedger.Cli --configuration Release --runtime win-x64 `
-  --self-contained true -p:PublishSingleFile=true -p:DebugType=None `
-  --output artifacts/win-x64
+  --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:DebugType=None --output artifacts/win-x64
 ```
+
+Releases contain self-contained single-file executables for Windows x64 and ARM64. Code signing is
+not currently applied: doing it correctly requires the maintainer's private code-signing certificate.
 
 ## Privacy
 
-OctetLedger stores only interface identifiers, names, byte counters, and collection timestamps.
-It does not record visited sites, IP addresses, packet contents, or application activity.
+OctetLedger stores interface identifiers, interface names, byte counters, and timestamps. It does
+not record visited sites, IP addresses, packet contents, or per-application activity.
 
-## Project status
+## License
 
-The repository remains private while the initial storage format, background service behavior,
-and license are being designed.
+OctetLedger is released under the [MIT License](LICENSE).
