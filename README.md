@@ -1,40 +1,46 @@
 # OctetLedger
 
-OctetLedger is a lightweight network traffic statistics tool for Windows. It reads the counters maintained by Windows itself, so it does not capture packets or inspect their contents.
-
-The project is currently an early prototype. Historical hourly, daily, and monthly statistics will be added in the next milestone.
+OctetLedger is a lightweight, privacy-friendly network traffic statistics tool for Windows.
+It reads operating-system counters instead of capturing packets, then stores counter differences
+in a local SQLite database.
 
 ## Current commands
 
 ```powershell
-octetledger
-octetledger interfaces
-octetledger interfaces --all
-octetledger live
-octetledger live --interface "Wi-Fi" --interval 1
+octetledger                       # Current counters for active interfaces
+octetledger interfaces            # Useful Windows interfaces
+octetledger interfaces --all      # Include filter-driver bindings
+octetledger live                  # Live download and upload rates
+octetledger collect               # Store one sample
+octetledger monitor               # Collect continuously every 60 seconds
+octetledger daily                 # Daily totals for the last 30 days
+octetledger monthly               # Monthly totals for the last 12 months
+octetledger status                # Database and collection status
 octetledger version
 octetledger help
 ```
 
-- `summary` shows cumulative counters for active interfaces.
-- `interfaces` lists the useful Windows network interfaces and removes duplicate filter-driver bindings.
-- `interfaces --all` includes every interface exposed by Windows for diagnostics.
-- `live` shows the current download and upload rates until Ctrl+C is pressed.
+The first `collect` or `monitor` sample creates a baseline. Traffic is recorded from the next
+sample onward. Data is stored in `%LOCALAPPDATA%\OctetLedger\octetledger.db`.
 
 ## Build from source
 
-OctetLedger currently requires the .NET 10 SDK.
+The project targets .NET 10:
 
 ```powershell
 dotnet build --configuration Release
 dotnet test --configuration Release
-dotnet run --project src/OctetLedger.Cli -- live
+dotnet publish src/OctetLedger.Cli --configuration Release --runtime win-x64 `
+  --self-contained true -p:PublishSingleFile=true -p:DebugType=None `
+  --output artifacts/win-x64
 ```
 
 ## Privacy
 
-OctetLedger only records byte counters for network interfaces. It does not record visited sites, IP addresses, packet contents, or application activity.
+OctetLedger stores only interface identifiers, names, byte counters, and collection timestamps.
+It does not record visited sites, IP addresses, packet contents, or application activity.
 
 ## Project status
 
-The repository remains private while the initial storage format, service behavior, and license are being designed.
+The repository remains private while the initial storage format, background service behavior,
+and license are being designed.
