@@ -39,6 +39,12 @@ public static class CollectorTaskManager
         if (!File.Exists(LauncherPath)) throw new InvalidOperationException("Collector is not installed.");
         TryDeleteStopFile();
         Process.Start(new ProcessStartInfo("wscript.exe", $"\"{LauncherPath}\"") { UseShellExecute = true });
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            Thread.Sleep(100);
+            if (TryGetRunningProcess() is not null) return;
+        }
+        throw new InvalidOperationException("Collector could not be started. Run 'octetledger monitor --interval 60' to see the error.");
     }
 
     public static void Stop()
