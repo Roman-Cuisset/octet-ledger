@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OctetLedger.Cli/OctetLedger.Cli.csproj" />
+    <Project Path="src/OctetLedger.Core/OctetLedger.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OctetLedger.Tests/OctetLedger.Tests.csproj" />
+  </Folder>
+</Solution>
