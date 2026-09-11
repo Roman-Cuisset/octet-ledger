@@ -23,6 +23,33 @@ octetledger help
 The first `collect` or `monitor` sample creates a baseline. Traffic is recorded from the next
 sample onward. Data is stored in `%LOCALAPPDATA%\OctetLedger\octetledger.db`.
 
+## Install the command
+
+After publishing the Windows executable, install it for the current user:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```
+
+Open a new terminal and run `octetledger`. The installer copies the executable to
+`%LOCALAPPDATA%\Programs\OctetLedger` and adds that directory to the user `PATH`.
+No administrator privileges are required. To remove the command while preserving collected data:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1
+```
+
+## Install the command
+
+After publishing, install the command for the current Windows user:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+```
+
+Open a new terminal and run `octetledger`. No administrator rights are required. To remove the
+installed command without deleting the traffic database, run `scripts\uninstall.ps1`.
+
 ## Build from source
 
 The project targets .NET 10:
