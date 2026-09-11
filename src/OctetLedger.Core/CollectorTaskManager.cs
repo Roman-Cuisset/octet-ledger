@@ -88,9 +88,11 @@ public static class CollectorTaskManager
 
     public static void ReleaseBackgroundProcess()
     {
-        if (!File.Exists(PidPath)) return;
-        var text = File.ReadAllText(PidPath);
-        if (int.TryParse(text, out var pid) && pid == Environment.ProcessId) TryDeletePidFile();
+        if (File.Exists(PidPath))
+        {
+            var text = File.ReadAllText(PidPath);
+            if (int.TryParse(text, out var pid) && pid == Environment.ProcessId) TryDeletePidFile();
+        }
         TryDeleteStopFile();
         collectorMutex?.ReleaseMutex();
         collectorMutex?.Dispose();
@@ -99,16 +101,37 @@ public static class CollectorTaskManager
 
     private static Process? TryGetRunningProcess()
     {
-        if (!File.Exists(PidPath)) return null;
-        try
+        if (File.Exists(PidPath))
         {
-            if (!int.TryParse(File.ReadAllText(PidPath), out var pid)) { TryDeletePidFile(); return null; }
-            var process = Process.GetProcessById(pid);
-            if (!process.HasExited && string.Equals(process.ProcessName, "octetledger", StringComparison.OrdinalIgnoreCase)) return process;
+            try
+            {
+                if (int.TryParse(File.ReadAllText(PidPath), out var pid))
+                {
+                    var process = Process.GetProcessById(pid);
+                    if (!process.HasExited && string.Equals(process.ProcessName, "octetledger", StringComparison.OrdinalIgnoreCase)) return process;
+                }
+            }
+            catch (ArgumentException) { }
+            catch (InvalidOperationException) { }
+            TryDeletePidFile();
         }
-        catch (ArgumentException) { }
-        catch (InvalidOperationException) { }
-        TryDeletePidFile();
+
+        var currentExecutable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(currentExecutable)) return null;
+        foreach (var candidate in Process.GetProcessesByName("octetledger"))
+        {
+            try
+            {
+                if (candidate.Id != Environment.ProcessId &&
+                    string.Equals(candidate.MainModule?.FileName, currentExecutable, StringComparison.OrdinalIgnoreCase))
+                {
+                    return candidate;
+                }
+            }
+            catch (System.ComponentModel.Win32Exception) { }
+            catch (InvalidOperationException) { }
+            candidate.Dispose();
+        }
         return null;
     }
 
