@@ -25,7 +25,14 @@ sample onward. Data is stored in `%LOCALAPPDATA%\OctetLedger\octetledger.db`.
 
 ## Install the command
 
-After publishing the Windows executable, install it for the current user:
+For a packaged release on another PC:
+
+1. Download and extract `OctetLedger-<version>-win-x64.zip`.
+2. Double-click `install.cmd`.
+3. Open a new PowerShell or Command Prompt window.
+4. Run `octetledger`.
+
+When working from the source repository, run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1

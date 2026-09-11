@@ -5,7 +5,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($Source)) {
-    $Source = Join-Path $PSScriptRoot '..\artifacts\win-x64\octetledger.exe'
+    $packagedExecutable = Join-Path $PSScriptRoot 'octetledger.exe'
+    $repositoryExecutable = Join-Path $PSScriptRoot '..\artifacts\win-x64\octetledger.exe'
+    $Source = if (Test-Path -LiteralPath $packagedExecutable) {
+        $packagedExecutable
+    } else {
+        $repositoryExecutable
+    }
 }
 $resolvedSource = (Resolve-Path -LiteralPath $Source).Path
 $installDirectory = Join-Path $env:LOCALAPPDATA 'Programs\OctetLedger'
