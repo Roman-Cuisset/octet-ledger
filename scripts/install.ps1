@@ -20,8 +20,35 @@ $installedExecutable = Join-Path $installDirectory 'octetledger.exe'
 New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
 if (Test-Path -LiteralPath $installedExecutable) {
     & $installedExecutable collector uninstall 2>$null | Out-Null
+
+    # Clean up a collector left behind by an interrupted older update.
+    Get-CimInstance Win32_Process -Filter "Name='octetledger.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ExecutablePath -eq $installedExecutable -and
+            $_.CommandLine -match '\smonitor\s' -and
+            $_.CommandLine -match '--background'
+        } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
 }
-Copy-Item -LiteralPath $resolvedSource -Destination $installedExecutable -Force
+$copied = $false
+for ($attempt = 1; $attempt -le 20; $attempt++) {
+    try {
+        Copy-Item -LiteralPath $resolvedSource -Destination $installedExecutable -Force
+        $copied = $true
+        break
+    }
+    catch {
+        if ($attempt -eq 20) {
+            throw
+        }
+        Start-Sleep -Milliseconds 250
+    }
+}
+if (-not $copied) {
+    throw 'OctetLedger executable could not be updated.'
+}
 
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ($null -eq $userPath) {

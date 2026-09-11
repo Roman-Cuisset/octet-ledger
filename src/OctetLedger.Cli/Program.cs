@@ -14,6 +14,7 @@ return command switch
     "collect" => CollectOnce(),
     "monitor" => await MonitorAsync(rest),
     "today" => ShowReport(ReportKind.Today, rest),
+    "total" => ShowReport(ReportKind.Total, rest),
     "hourly" => ShowReport(ReportKind.Hourly, rest),
     "daily" => ShowReport(ReportKind.Daily, rest),
     "weekly" => ShowReport(ReportKind.Weekly, rest),
@@ -160,7 +161,14 @@ static async Task<int> MonitorAsync(string[] arguments)
             {
                 var result = store.Collect(NetworkInterfaceReader.ReadDistinct());
                 if (!quiet) Console.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}  ↓ {ByteFormatter.Format(result.BytesReceived),10}  ↑ {ByteFormatter.Format(result.BytesSent),10}");
-                await Task.Delay(TimeSpan.FromSeconds(interval), cancellation.Token);
+                var remaining = TimeSpan.FromSeconds(interval);
+                while (remaining > TimeSpan.Zero && !cancellation.IsCancellationRequested)
+                {
+                    if (background && CollectorTaskManager.StopRequested) return 0;
+                    var delay = remaining < TimeSpan.FromSeconds(1) ? remaining : TimeSpan.FromSeconds(1);
+                    await Task.Delay(delay, cancellation.Token);
+                    remaining -= delay;
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -179,6 +187,8 @@ static int ShowReport(ReportKind kind, string[] arguments)
     DateTimeOffset startLocal;
     switch (kind)
     {
+        case ReportKind.Total:
+            count = 1; startLocal = DateTimeOffset.UnixEpoch; break;
         case ReportKind.Today:
             count = 1; startLocal = new DateTimeOffset(now.Date, now.Offset); break;
         case ReportKind.Hourly:
@@ -203,6 +213,7 @@ static int ShowReport(ReportKind kind, string[] arguments)
     var buckets = store.ReadBuckets(startLocal.ToUniversalTime());
     IReadOnlyList<TrafficReportRow> rows = kind switch
     {
+        ReportKind.Total => TrafficReport.Total(buckets),
         ReportKind.Today => TrafficReport.Daily(buckets),
         ReportKind.Hourly => TrafficReport.Hourly(buckets),
         ReportKind.Daily => TrafficReport.Daily(buckets),
@@ -286,18 +297,21 @@ static int ManageCollector(string[] arguments)
 static int ManageDatabase(string[] arguments)
 {
     var action = arguments.FirstOrDefault()?.ToLowerInvariant() ?? "check";
-    using var store = new TrafficStore();
     switch (action)
     {
         case "check":
-            var result = store.CheckIntegrity();
+            var checkedPath = arguments.Skip(1).FirstOrDefault() ?? AppDataPaths.DatabasePath;
+            var result = TrafficStore.CheckIntegrity(checkedPath);
             Console.WriteLine(result.IsHealthy ? "Database integrity: OK" : "Database integrity: FAILED");
             if (!result.IsHealthy) foreach (var message in result.Messages) Console.WriteLine($"  {message}");
             return result.IsHealthy ? 0 : 1;
         case "backup":
+        {
             var destination = arguments.Skip(1).FirstOrDefault() ?? Path.Combine(Environment.CurrentDirectory, $"OctetLedger-backup-{DateTime.Now:yyyyMMdd-HHmmss}.db");
+            using var store = new TrafficStore();
             Console.WriteLine($"Database backup created: {store.Backup(destination)}");
             return 0;
+        }
         default: Console.Error.WriteLine("Usage: octetledger database [check|backup [path]]"); return 2;
     }
 }
@@ -330,7 +344,7 @@ static int ShowHelp()
           octetledger interfaces [--all]
           octetledger interface [show|set <name-or-id>|clear]
           octetledger live [--interface <name-or-id>] [--interval <seconds>]
-          octetledger today|hourly|daily|weekly|monthly|top [options]
+          octetledger total|today|hourly|daily|weekly|monthly|top [options]
           octetledger collector [install|status|start|stop|uninstall]
           octetledger database [check|backup [path]]
           octetledger status|version|help
@@ -342,6 +356,7 @@ static int ShowHelp()
           --json                     Print machine-readable JSON
           --csv <path>               Save CSV data
 
+        'total' shows all traffic recorded since the first stored sample.
         Reports use one primary interface by default to avoid VPN double counting.
         """);
     return 0;
@@ -386,4 +401,4 @@ static int? ReadPositiveInteger(string[] arguments, string option, int defaultVa
 }
 static string Trim(string value, int maximumLength) => value.Length <= maximumLength ? value : $"{value[..(maximumLength - 1)]}…";
 
-enum ReportKind { Today, Hourly, Daily, Weekly, Monthly, Top }
+enum ReportKind { Total, Today, Hourly, Daily, Weekly, Monthly, Top }

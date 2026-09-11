@@ -5,6 +5,25 @@ namespace OctetLedger.Tests;
 public class TrafficReportTests
 {
     [Fact]
+    public void TotalCombinesEveryBucketForEachInterface()
+    {
+        var buckets = new[]
+        {
+            new TrafficBucket("wifi", "Wi-Fi", DateTimeOffset.UtcNow.AddHours(-2), 1_000, 500),
+            new TrafficBucket("wifi", "Wi-Fi", DateTimeOffset.UtcNow.AddHours(-1), 2_000, 750),
+            new TrafficBucket("vpn", "VPN", DateTimeOffset.UtcNow.AddHours(-1), 9_000, 3_000)
+        };
+
+        var rows = TrafficReport.Total(buckets);
+
+        Assert.Equal(2, rows.Count);
+        var wifi = Assert.Single(rows, row => row.InterfaceId == "wifi");
+        Assert.Equal("all-time", wifi.Period);
+        Assert.Equal(3_000, wifi.BytesReceived);
+        Assert.Equal(1_250, wifi.BytesSent);
+    }
+
+    [Fact]
     public void DailySeparatesInterfacesAndComputesPeak()
     {
         var now = DateTimeOffset.Now;

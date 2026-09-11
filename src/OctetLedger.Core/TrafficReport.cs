@@ -16,6 +16,15 @@ public sealed record TrafficReportRow(
 
 public static class TrafficReport
 {
+    public static IReadOnlyList<TrafficReportRow> Total(IEnumerable<TrafficBucket> buckets)
+    {
+        var values = buckets.ToArray();
+        return Build(
+            values,
+            _ => "all-time",
+            group => Math.Max(1, (DateTimeOffset.UtcNow - group.Min(bucket => bucket.MinuteUtc)).TotalSeconds));
+    }
+
     public static IReadOnlyList<TrafficReportRow> Hourly(IEnumerable<TrafficBucket> buckets)
     {
         return Build(

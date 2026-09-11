@@ -32,6 +32,7 @@ octetledger interfaces                   # List interfaces
 octetledger interface set "Wi-Fi"        # Save the default interface
 octetledger live                         # Real-time rates
 
+octetledger total                        # All recorded traffic since the beginning
 octetledger today                        # Today's stored traffic
 octetledger hourly --hours 24
 octetledger daily --days 30

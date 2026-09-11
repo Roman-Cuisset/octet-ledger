@@ -6,9 +6,12 @@ public sealed record CollectorTaskStatus(bool Installed, string State, string? D
 
 public static class CollectorTaskManager
 {
+    private const string CollectorMutexName = @"Local\OctetLedgerCollector";
+    private static Mutex? collectorMutex;
     public const string StartupValueName = "OctetLedger Collector";
     public static string LauncherPath => Path.Combine(AppDataPaths.DataDirectory, "collector.vbs");
     public static string PidPath => Path.Combine(AppDataPaths.DataDirectory, "collector.pid");
+    public static string StopPath => Path.Combine(AppDataPaths.DataDirectory, "collector.stop");
 
     public static CollectorTaskStatus GetStatus()
     {
@@ -34,6 +37,7 @@ public static class CollectorTaskManager
     {
         if (TryGetRunningProcess() is not null) return;
         if (!File.Exists(LauncherPath)) throw new InvalidOperationException("Collector is not installed.");
+        TryDeleteStopFile();
         Process.Start(new ProcessStartInfo("wscript.exe", $"\"{LauncherPath}\"") { UseShellExecute = true });
     }
 
@@ -41,9 +45,14 @@ public static class CollectorTaskManager
     {
         var process = TryGetRunningProcess();
         if (process is null) return;
-        process.Kill(entireProcessTree: true);
-        process.WaitForExit(5000);
+        File.WriteAllText(StopPath, DateTimeOffset.UtcNow.ToString("O"));
+        if (!process.WaitForExit(15000))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(5000);
+        }
         TryDeletePidFile();
+        TryDeleteStopFile();
     }
 
     public static void Uninstall()
@@ -56,17 +65,30 @@ public static class CollectorTaskManager
 
     public static bool TryClaimBackgroundProcess()
     {
-        if (TryGetRunningProcess() is not null) return false;
+        collectorMutex = new Mutex(true, CollectorMutexName, out var createdNew);
+        if (!createdNew)
+        {
+            collectorMutex.Dispose();
+            collectorMutex = null;
+            return false;
+        }
         Directory.CreateDirectory(AppDataPaths.DataDirectory);
+        TryDeleteStopFile();
         File.WriteAllText(PidPath, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         return true;
     }
+
+    public static bool StopRequested => File.Exists(StopPath);
 
     public static void ReleaseBackgroundProcess()
     {
         if (!File.Exists(PidPath)) return;
         var text = File.ReadAllText(PidPath);
         if (int.TryParse(text, out var pid) && pid == Environment.ProcessId) TryDeletePidFile();
+        TryDeleteStopFile();
+        collectorMutex?.ReleaseMutex();
+        collectorMutex?.Dispose();
+        collectorMutex = null;
     }
 
     private static Process? TryGetRunningProcess()
@@ -87,6 +109,13 @@ public static class CollectorTaskManager
     private static void TryDeletePidFile()
     {
         try { if (File.Exists(PidPath)) File.Delete(PidPath); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private static void TryDeleteStopFile()
+    {
+        try { if (File.Exists(StopPath)) File.Delete(StopPath); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }

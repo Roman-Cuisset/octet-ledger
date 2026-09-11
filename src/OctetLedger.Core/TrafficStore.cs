@@ -134,6 +134,33 @@ public sealed class TrafficStore : IDisposable
             messages);
     }
 
+    public static DatabaseCheckResult CheckIntegrity(string databasePath)
+    {
+        try
+        {
+            using var readOnlyConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.GetFullPath(databasePath),
+                Mode = SqliteOpenMode.ReadOnly,
+                Cache = SqliteCacheMode.Private,
+                Pooling = false
+            }.ToString());
+            readOnlyConnection.Open();
+            using var command = readOnlyConnection.CreateCommand();
+            command.CommandText = "PRAGMA integrity_check;";
+            using var reader = command.ExecuteReader();
+            var messages = new List<string>();
+            while (reader.Read()) messages.Add(reader.GetString(0));
+            return new DatabaseCheckResult(
+                messages.Count == 1 && string.Equals(messages[0], "ok", StringComparison.OrdinalIgnoreCase),
+                messages);
+        }
+        catch (SqliteException exception)
+        {
+            return new DatabaseCheckResult(false, [$"SQLite error {exception.SqliteErrorCode}: {exception.Message}"]);
+        }
+    }
+
     public string Backup(string destinationPath)
     {
         var fullPath = Path.GetFullPath(destinationPath);
