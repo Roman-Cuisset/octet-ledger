@@ -298,9 +298,14 @@ static void PrintReport(IReadOnlyList<TrafficReportRow> rows)
     var collector = CollectorTaskManager.GetStatus();
     if (rows.Count == 0)
     {
-        Console.WriteLine(collector.State == "Running"
+        Console.WriteLine(collector.State is "Running" or "Starting, first collection pending"
             ? "No traffic interval has been recorded yet. The collector is running; try again in about one minute."
             : "No stored traffic yet. Install the collector with 'octetledger collector install'.");
+    }
+    else if (collector.State == "Starting, first collection pending")
+    {
+        Console.Error.WriteLine("Notice: the collector is running and its first collection is still pending.");
+        Console.Error.WriteLine("Totals will resume automatically; check again in about one minute.");
     }
     else if (collector.State != "Running")
     {
@@ -321,12 +326,19 @@ static int ManageCollector(string[] arguments)
                 if (string.IsNullOrEmpty(executable) || !string.Equals(Path.GetFileName(executable), "octetledger.exe", StringComparison.OrdinalIgnoreCase))
                 { Console.Error.WriteLine("Install the packaged octetledger.exe first, then run this command."); return 1; }
                 CollectorTaskManager.Install(executable);
-                CollectorTaskManager.Start();
-                Console.WriteLine("Automatic collection installed and started (every 60 seconds).");
+                var installStartup = CollectorTaskManager.Start();
+                Console.WriteLine(installStartup == CollectorStartupState.Ready
+                    ? "Automatic collection installed and started (every 60 seconds)."
+                    : "Automatic collection installed; first collection is still pending.");
                 return 0;
             case "status":
                 var status = CollectorTaskManager.GetStatus(); Console.WriteLine($"Collector: {status.State}"); return status.Installed ? 0 : 1;
-            case "start": CollectorTaskManager.Start(); Console.WriteLine("Collector started."); return 0;
+            case "start":
+                var startup = CollectorTaskManager.Start();
+                Console.WriteLine(startup == CollectorStartupState.Ready
+                    ? "Collector started and collecting."
+                    : "Collector started; first collection is still pending and will complete automatically.");
+                return 0;
             case "stop": CollectorTaskManager.Stop(); Console.WriteLine("Collector stopped."); return 0;
             case "uninstall": CollectorTaskManager.Uninstall(); Console.WriteLine("Automatic collector removed. Stored statistics were preserved."); return 0;
             default: Console.Error.WriteLine("Usage: octetledger collector [install|status|start|stop|uninstall]"); return 2;

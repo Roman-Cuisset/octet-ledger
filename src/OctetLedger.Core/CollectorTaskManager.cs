@@ -4,7 +4,7 @@ namespace OctetLedger.Core;
 
 public sealed record CollectorTaskStatus(bool Installed, string State, string? Details = null);
 
-internal enum CollectorStartupState
+public enum CollectorStartupState
 {
     Failed,
     Pending,
@@ -101,7 +101,7 @@ public static class CollectorTaskManager
         EnsureSuccess(result, "register automatic startup");
     }
 
-    public static void Start()
+    public static CollectorStartupState Start()
     {
         var registered = Run("reg.exe", "query", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", StartupValueName).ExitCode == 0;
         if (!File.Exists(LauncherPath) || !registered)
@@ -113,7 +113,7 @@ public static class CollectorTaskManager
         }
 
         using var existingProcess = TryGetRunningProcess();
-        if (existingProcess is not null && File.Exists(ReadyPath)) return;
+        if (existingProcess is not null && File.Exists(ReadyPath)) return CollectorStartupState.Ready;
         if (existingProcess is null)
         {
             TryDeleteStopFile();
@@ -125,7 +125,7 @@ public static class CollectorTaskManager
             using var process = TryGetRunningProcess();
             return (process is not null, File.Exists(ReadyPath));
         });
-        if (startup is CollectorStartupState.Ready or CollectorStartupState.Pending) return;
+        if (startup is CollectorStartupState.Ready or CollectorStartupState.Pending) return startup;
         throw new InvalidOperationException($"Collector could not be launched. See '{LogPath}' if it was created.");
     }
 
