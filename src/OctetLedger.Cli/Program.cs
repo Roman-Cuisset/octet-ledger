@@ -149,7 +149,20 @@ static async Task<int> MonitorAsync(string[] arguments)
     { Console.Error.WriteLine("--interval must be between 1 and 3600 seconds."); return 2; }
     var quiet = HasFlag(arguments, "--quiet");
     var background = HasFlag(arguments, "--background");
-    if (background && !CollectorTaskManager.TryClaimBackgroundProcess()) return 0;
+    var backgroundClaimed = false;
+    if (background)
+    {
+        try
+        {
+            if (!CollectorTaskManager.TryClaimBackgroundProcess()) return 0;
+            backgroundClaimed = true;
+        }
+        catch (Exception exception)
+        {
+            CollectorTaskManager.RecordBackgroundError(exception);
+            return 1;
+        }
+    }
     try
     {
         using var cancellation = CreateCancellation();
@@ -184,7 +197,17 @@ static async Task<int> MonitorAsync(string[] arguments)
     }
     finally
     {
-        if (background) CollectorTaskManager.ReleaseBackgroundProcess();
+        if (backgroundClaimed)
+        {
+            try
+            {
+                CollectorTaskManager.ReleaseBackgroundProcess();
+            }
+            catch (Exception exception)
+            {
+                CollectorTaskManager.RecordBackgroundError(exception);
+            }
+        }
     }
 }
 
