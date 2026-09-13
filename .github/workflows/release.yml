@@ -10,6 +10,9 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+      SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
     strategy:
       matrix:
         runtime: [win-x64, win-arm64]
@@ -41,11 +44,8 @@ jobs:
           --output artifacts/${{ matrix.runtime }}
 
       - name: Sign executable when release certificate is configured
-        if: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 != '' && secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD != '' }}
+        if: ${{ env.SIGNING_CERTIFICATE_BASE64 != '' && env.SIGNING_CERTIFICATE_PASSWORD != '' }}
         shell: pwsh
-        env:
-          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
-          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: |
           $certificatePath = Join-Path $env:RUNNER_TEMP 'octetledger-signing.pfx'
           [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
