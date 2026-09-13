@@ -9,7 +9,8 @@ public sealed record TrafficReportRow(
     long BytesReceived,
     long BytesSent,
     double AverageBytesPerSecond,
-    double PeakBytesPerSecond)
+    double PeakBytesPerSecond,
+    double LongestIntervalSeconds = 60)
 {
     public long TotalBytes => BytesReceived + BytesSent;
 }
@@ -29,7 +30,7 @@ public static class TrafficReport
     {
         return Build(
             buckets,
-            bucket => bucket.MinuteUtc.ToLocalTime().ToString("yyyy-MM-dd HH:00", CultureInfo.InvariantCulture),
+            bucket => bucket.MinuteUtc.ToLocalTime().ToString("yyyy-MM-dd HH:00 zzz", CultureInfo.InvariantCulture),
             _ => 3600);
     }
 
@@ -70,6 +71,48 @@ public static class TrafficReport
             .ToArray();
     }
 
+    public static IReadOnlyList<TrafficBucket> SelectInterface(
+        IEnumerable<TrafficBucket> buckets,
+        string? selector,
+        string? preferredInterfaceId)
+    {
+        var values = buckets.ToArray();
+        if (values.Length == 0) return values;
+
+        var selectedId = selector is not null
+            ? values.FirstOrDefault(bucket =>
+                string.Equals(bucket.InterfaceId, selector, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(bucket.InterfaceName, selector, StringComparison.OrdinalIgnoreCase))?.InterfaceId
+            : values.Any(bucket => string.Equals(bucket.InterfaceId, preferredInterfaceId, StringComparison.OrdinalIgnoreCase))
+                ? preferredInterfaceId
+                : values.GroupBy(bucket => bucket.InterfaceId)
+                    .OrderByDescending(group => group.Sum(bucket => bucket.BytesReceived + bucket.BytesSent))
+                    .First().Key;
+
+        return selectedId is null
+            ? []
+            : values.Where(bucket => string.Equals(bucket.InterfaceId, selectedId, StringComparison.OrdinalIgnoreCase)).ToArray();
+    }
+
+    public static IReadOnlyList<TrafficReportRow> SelectInterfaceRows(
+        IEnumerable<TrafficReportRow> rows,
+        string? selector,
+        string? preferredInterfaceId)
+    {
+        var values = rows.ToArray();
+        if (values.Length == 0) return values;
+        var selectedId = selector is not null
+            ? values.FirstOrDefault(row =>
+                string.Equals(row.InterfaceId, selector, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(row.InterfaceName, selector, StringComparison.OrdinalIgnoreCase))?.InterfaceId
+            : values.Any(row => string.Equals(row.InterfaceId, preferredInterfaceId, StringComparison.OrdinalIgnoreCase))
+                ? preferredInterfaceId
+                : values.OrderByDescending(row => row.TotalBytes).First().InterfaceId;
+        return selectedId is null
+            ? []
+            : values.Where(row => string.Equals(row.InterfaceId, selectedId, StringComparison.OrdinalIgnoreCase)).ToArray();
+    }
+
     private static TrafficReportRow[] Build(
         IEnumerable<TrafficBucket> buckets,
         Func<TrafficBucket, string> periodSelector,
@@ -82,7 +125,8 @@ public static class TrafficReport
                 var received = group.Sum(bucket => bucket.BytesReceived);
                 var sent = group.Sum(bucket => bucket.BytesSent);
                 var seconds = Math.Max(1, secondsSelector(group));
-                var peak = group.Max(bucket => (bucket.BytesReceived + bucket.BytesSent) / 60d);
+                var peak = group.Max(bucket => bucket.PeakBytesPerSecond ??
+                    (bucket.BytesReceived + bucket.BytesSent) / Math.Max(1, bucket.IntervalSeconds));
                 return new TrafficReportRow(
                     group.Key.Item1,
                     group.Key.InterfaceId,
@@ -90,7 +134,8 @@ public static class TrafficReport
                     received,
                     sent,
                     (received + sent) / seconds,
-                    peak);
+                    peak,
+                    group.Max(bucket => bucket.LongestIntervalSeconds ?? bucket.IntervalSeconds));
             })
             .OrderByDescending(row => row.Period, StringComparer.Ordinal)
             .ThenBy(row => row.InterfaceName, StringComparer.OrdinalIgnoreCase)
@@ -110,9 +155,16 @@ public static class TrafficReport
 
     private static double SecondsForRange(DateTime start, int days)
     {
-        var end = start.AddDays(days);
-        var now = DateTime.Now;
-        var effectiveEnd = end < now ? end : now;
-        return Math.Max(1, (effectiveEnd - start).TotalSeconds);
+        return SecondsForRange(start, days, TimeZoneInfo.Local, DateTimeOffset.UtcNow);
+    }
+
+    internal static double SecondsForRange(DateTime start, int days, TimeZoneInfo timeZone, DateTimeOffset nowUtc)
+    {
+        var localStart = DateTime.SpecifyKind(start, DateTimeKind.Unspecified);
+        var localEnd = DateTime.SpecifyKind(start.AddDays(days), DateTimeKind.Unspecified);
+        var startUtc = TimeZoneInfo.ConvertTimeToUtc(localStart, timeZone);
+        var endUtc = TimeZoneInfo.ConvertTimeToUtc(localEnd, timeZone);
+        var effectiveEnd = endUtc < nowUtc.UtcDateTime ? endUtc : nowUtc.UtcDateTime;
+        return Math.Max(1, (effectiveEnd - startUtc).TotalSeconds);
     }
 }

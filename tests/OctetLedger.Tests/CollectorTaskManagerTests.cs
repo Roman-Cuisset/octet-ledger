@@ -71,4 +71,43 @@ public class CollectorTaskManagerTests
 
         Assert.Equal(CollectorStartupState.Failed, state);
     }
+
+    [Fact]
+    public void StatusReportsDelayedCollectionEvenWhenProcessStillExists()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        var status = CollectorTaskManager.DetermineStatus(
+            registered: true, launcherExists: true, running: true,
+            lastSuccess: now.AddMinutes(-4), now);
+
+        Assert.Equal("Running, collection delayed", status.State);
+        Assert.Contains("4 minutes", status.Details);
+    }
+
+    [Fact]
+    public void StatusReportsRecentSuccessfulCollectionAsRunning()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        var status = CollectorTaskManager.DetermineStatus(
+            registered: true, launcherExists: true, running: true,
+            lastSuccess: now.AddMinutes(-1), now);
+
+        Assert.Equal("Running", status.State);
+        Assert.Null(status.Details);
+    }
+
+    [Fact]
+    public void StatusReportsRepeatedErrorsBeforeCollectionBecomesLate()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        var status = CollectorTaskManager.DetermineStatus(
+            registered: true, launcherExists: true, running: true,
+            lastSuccess: now.AddMinutes(-1), now, consecutiveErrors: 2);
+
+        Assert.Equal("Running, retrying after errors", status.State);
+        Assert.Contains("2 consecutive", status.Details);
+    }
 }

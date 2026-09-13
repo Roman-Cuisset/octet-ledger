@@ -19,7 +19,8 @@ public static class TrafficReportExporter
             bytesSent = row.BytesSent,
             totalBytes = row.TotalBytes,
             averageBytesPerSecond = Math.Round(row.AverageBytesPerSecond, 2),
-            peakBytesPerSecond = Math.Round(row.PeakBytesPerSecond, 2)
+            peakBytesPerSecond = Math.Round(row.PeakBytesPerSecond, 2),
+            longestIntervalSeconds = Math.Round(row.LongestIntervalSeconds, 2)
         });
 
         return JsonSerializer.Serialize(values, JsonOptions);
@@ -40,7 +41,7 @@ public static class TrafficReportExporter
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
         writer.WriteLine(
             "Period,InterfaceId,InterfaceName,BytesReceived,BytesSent,TotalBytes," +
-            "AverageBytesPerSecond,PeakBytesPerSecond");
+            "AverageBytesPerSecond,PeakBytesPerSecond,LongestIntervalSeconds");
 
         foreach (var row in rows)
         {
@@ -52,7 +53,8 @@ public static class TrafficReportExporter
                 row.BytesSent.ToString(CultureInfo.InvariantCulture),
                 row.TotalBytes.ToString(CultureInfo.InvariantCulture),
                 row.AverageBytesPerSecond.ToString("0.00", CultureInfo.InvariantCulture),
-                row.PeakBytesPerSecond.ToString("0.00", CultureInfo.InvariantCulture)));
+                row.PeakBytesPerSecond.ToString("0.00", CultureInfo.InvariantCulture),
+                row.LongestIntervalSeconds.ToString("0.00", CultureInfo.InvariantCulture)));
         }
     }
 

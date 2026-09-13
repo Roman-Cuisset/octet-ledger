@@ -11,7 +11,7 @@ return command switch
     "interfaces" or "iflist" => ShowInterfaces(rest),
     "interface" => ManageInterface(rest),
     "live" => await ShowLiveAsync(rest),
-    "collect" => CollectOnce(),
+    "collect" => rest.Length == 0 ? CollectOnce() : UnexpectedArguments("collect"),
     "monitor" => await MonitorAsync(rest),
     "today" => ShowReport(ReportKind.Today, rest),
     "total" => ShowReport(ReportKind.Total, rest),
@@ -22,14 +22,17 @@ return command switch
     "top" => ShowReport(ReportKind.Top, rest),
     "collector" => ManageCollector(rest),
     "database" or "db" => ManageDatabase(rest),
-    "status" => ShowStatus(),
-    "help" or "--help" or "-h" => ShowHelp(),
-    "version" or "--version" => ShowVersion(),
+    "status" => rest.Length == 0 ? ShowStatus() : UnexpectedArguments("status"),
+    "help" or "--help" or "-h" => rest.Length == 0 ? ShowHelp() : UnexpectedArguments("help"),
+    "version" or "--version" => rest.Length == 0 ? ShowVersion() : UnexpectedArguments("version"),
     _ => UnknownCommand(command)
 };
 
 static int ShowSummary(string[] arguments)
 {
+    if (!ValidateOptions(arguments, ["--all"], ["--interface", "-i"])) return 2;
+    if (HasFlag(arguments, "--all") && (ReadOption(arguments, "--interface") is not null || ReadOption(arguments, "-i") is not null))
+    { Console.Error.WriteLine("Use either --all or --interface, not both."); return 2; }
     var selected = SelectSnapshots(NetworkInterfaceReader.ReadDistinct(), arguments);
     if (selected is null) return 2;
     Console.WriteLine("OctetLedger — Windows network traffic statistics\n");
@@ -52,6 +55,7 @@ static int ShowSummary(string[] arguments)
 
 static int ShowInterfaces(string[] arguments)
 {
+    if (!ValidateOptions(arguments, ["--all"], [])) return 2;
     var interfaces = HasFlag(arguments, "--all") ? NetworkInterfaceReader.ReadAll() : NetworkInterfaceReader.ReadDistinct();
     var preferred = OctetLedgerSettings.Load().PreferredInterfaceId;
     Console.WriteLine($"{"Default",-7} {"Status",-10} {"Name",-28} {"Type",-18} {"Received",12} {"Sent",12}");
@@ -73,6 +77,7 @@ static int ManageInterface(string[] arguments)
     switch (action)
     {
         case "show":
+            if (arguments.Length > 1) { Console.Error.WriteLine("Usage: octetledger interface show"); return 2; }
             var selected = NetworkInterfaceSelector.SelectPrimary(snapshots, settings.PreferredInterfaceId);
             if (selected is null) { Console.Error.WriteLine("No active network interface was found."); return 1; }
             Console.WriteLine($"Default interface: {selected.Name}");
@@ -87,6 +92,7 @@ static int ManageInterface(string[] arguments)
             Console.WriteLine($"Default interface set to: {match.Name}");
             return 0;
         case "clear":
+            if (arguments.Length > 1) { Console.Error.WriteLine("Usage: octetledger interface clear"); return 2; }
             new OctetLedgerSettings().Save();
             Console.WriteLine("Default interface selection is now automatic.");
             return 0;
@@ -98,6 +104,7 @@ static int ManageInterface(string[] arguments)
 
 static async Task<int> ShowLiveAsync(string[] arguments)
 {
+    if (!ValidateOptions(arguments, [], ["--interval", "--interface", "-i"])) return 2;
     var intervalText = ReadOption(arguments, "--interval") ?? "1";
     if (!double.TryParse(intervalText, CultureInfo.InvariantCulture, out var interval) || interval is < 0.2 or > 60)
     { Console.Error.WriteLine("--interval must be between 0.2 and 60 seconds."); return 2; }
@@ -144,6 +151,7 @@ static int CollectOnce()
 
 static async Task<int> MonitorAsync(string[] arguments)
 {
+    if (!ValidateOptions(arguments, ["--quiet", "--background"], ["--interval"])) return 2;
     var intervalText = ReadOption(arguments, "--interval") ?? "60";
     if (!double.TryParse(intervalText, CultureInfo.InvariantCulture, out var interval) || interval is < 1 or > 3600)
     { Console.Error.WriteLine("--interval must be between 1 and 3600 seconds."); return 2; }
@@ -213,35 +221,85 @@ static async Task<int> MonitorAsync(string[] arguments)
 
 static int ShowReport(ReportKind kind, string[] arguments)
 {
+    var countOption = kind switch
+    {
+        ReportKind.Hourly => "--hours",
+        ReportKind.Daily or ReportKind.Top => "--days",
+        ReportKind.Weekly => "--weeks",
+        ReportKind.Monthly => "--months",
+        _ => null
+    };
+    var valueOptions = new List<string> { "--interface", "-i", "--csv" };
+    if (countOption is not null) valueOptions.Add(countOption);
+    if (!ValidateOptions(arguments, ["--all", "--json"], valueOptions)) return 2;
+    if (HasFlag(arguments, "--json") && ReadOption(arguments, "--csv") is not null)
+    { Console.Error.WriteLine("Use either --json or --csv, not both."); return 2; }
+    if (HasFlag(arguments, "--all") && (ReadOption(arguments, "--interface") is not null || ReadOption(arguments, "-i") is not null))
+    { Console.Error.WriteLine("Use either --all or --interface, not both."); return 2; }
+
     var now = DateTimeOffset.Now;
     int? count;
-    DateTimeOffset startLocal;
+    DateTimeOffset startUtc;
     switch (kind)
     {
         case ReportKind.Total:
-            count = 1; startLocal = DateTimeOffset.UnixEpoch; break;
+            count = 1; startUtc = DateTimeOffset.UnixEpoch; break;
         case ReportKind.Today:
-            count = 1; startLocal = new DateTimeOffset(now.Date, now.Offset); break;
+            count = 1; startUtc = LocalTimeToUtc(now.Date); break;
         case ReportKind.Hourly:
             count = ReadPositiveInteger(arguments, "--hours", 24, 1, 744);
-            startLocal = new DateTimeOffset(now.Year, now.Month, now.Day, now.Hour, 0, 0, now.Offset).AddHours(-(count.GetValueOrDefault() - 1)); break;
+            startUtc = LocalTimeToUtc(new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddHours(-(count.GetValueOrDefault() - 1))); break;
         case ReportKind.Daily:
             count = ReadPositiveInteger(arguments, "--days", 30, 1, 3660);
-            startLocal = new DateTimeOffset(now.Date, now.Offset).AddDays(-(count.GetValueOrDefault() - 1)); break;
+            startUtc = LocalTimeToUtc(now.Date.AddDays(-(count.GetValueOrDefault() - 1))); break;
         case ReportKind.Weekly:
             count = ReadPositiveInteger(arguments, "--weeks", 12, 1, 520);
             var monday = now.Date.AddDays(-(((int)now.DayOfWeek + 6) % 7));
-            startLocal = new DateTimeOffset(monday, now.Offset).AddDays(-7 * (count.GetValueOrDefault() - 1)); break;
+            startUtc = LocalTimeToUtc(monday.AddDays(-7 * (count.GetValueOrDefault() - 1))); break;
         case ReportKind.Monthly:
             count = ReadPositiveInteger(arguments, "--months", 12, 1, 120);
-            startLocal = new DateTimeOffset(now.Year, now.Month, 1, 0, 0, 0, now.Offset).AddMonths(-(count.GetValueOrDefault() - 1)); break;
+            startUtc = LocalTimeToUtc(new DateTime(now.Year, now.Month, 1).AddMonths(-(count.GetValueOrDefault() - 1))); break;
         default:
             count = ReadPositiveInteger(arguments, "--days", 10, 1, 1000);
-            startLocal = new DateTimeOffset(now.Date, now.Offset).AddYears(-10); break;
+            startUtc = LocalTimeToUtc(now.Date.AddYears(-10)); break;
     }
     if (count is null) return 2;
     using var store = new TrafficStore();
-    var buckets = store.ReadBuckets(startLocal.ToUniversalTime());
+    if (kind == ReportKind.Total)
+    {
+        IReadOnlyList<TrafficReportRow> totalRows = store.ReadTotalReportRows(DateTimeOffset.UtcNow);
+        string totalScope;
+        if (HasFlag(arguments, "--all"))
+        {
+            totalScope = "all stored interfaces";
+        }
+        else
+        {
+            var selector = ReadOption(arguments, "--interface") ?? ReadOption(arguments, "-i");
+            totalRows = TrafficReport.SelectInterfaceRows(totalRows, selector, OctetLedgerSettings.Load().PreferredInterfaceId);
+            totalScope = selector is not null
+                ? $"interface '{selector}' across all recorded history"
+                : totalRows.Count > 0 ? $"historical interface '{totalRows[0].InterfaceName}' across all recorded history" : "all recorded history";
+        }
+        return OutputReport(totalRows, arguments, totalScope);
+    }
+
+    var allBuckets = store.ReadBuckets(startUtc);
+    IReadOnlyList<TrafficBucket> buckets;
+    string scope;
+    if (HasFlag(arguments, "--all"))
+    {
+        buckets = allBuckets;
+        scope = "all stored interfaces in the requested period";
+    }
+    else
+    {
+        var selector = ReadOption(arguments, "--interface") ?? ReadOption(arguments, "-i");
+        buckets = TrafficReport.SelectInterface(allBuckets, selector, OctetLedgerSettings.Load().PreferredInterfaceId);
+        scope = selector is not null
+            ? $"interface '{selector}' in the requested period"
+            : buckets.Count > 0 ? $"historical interface '{buckets[0].InterfaceName}' in the requested period" : "the requested period";
+    }
     IReadOnlyList<TrafficReportRow> rows = kind switch
     {
         ReportKind.Total => TrafficReport.Total(buckets),
@@ -252,7 +310,11 @@ static int ShowReport(ReportKind kind, string[] arguments)
         ReportKind.Monthly => TrafficReport.Monthly(buckets),
         _ => TrafficReport.TopDays(buckets, count.Value)
     };
-    rows = FilterReportInterfaces(rows, arguments);
+    return OutputReport(rows, arguments, scope);
+}
+
+static int OutputReport(IReadOnlyList<TrafficReportRow> rows, string[] arguments, string scope)
+{
     if (HasFlag(arguments, "--json")) { Console.WriteLine(TrafficReportExporter.ToJson(rows)); return 0; }
     var csvPath = ReadOption(arguments, "--csv");
     if (csvPath is not null)
@@ -261,35 +323,13 @@ static int ShowReport(ReportKind kind, string[] arguments)
         Console.WriteLine($"CSV saved to: {Path.GetFullPath(csvPath)}");
         return 0;
     }
-    PrintReport(rows);
+    PrintReport(rows, scope);
     return 0;
 }
 
-static IReadOnlyList<TrafficReportRow> FilterReportInterfaces(IReadOnlyList<TrafficReportRow> rows, string[] arguments)
+static void PrintReport(IReadOnlyList<TrafficReportRow> rows, string scope)
 {
-    if (HasFlag(arguments, "--all") || rows.Count == 0) return rows;
-    var selector = ReadOption(arguments, "--interface") ?? ReadOption(arguments, "-i");
-    string? id;
-    if (selector is not null)
-    {
-        id = rows.FirstOrDefault(row => string.Equals(row.InterfaceId, selector, StringComparison.OrdinalIgnoreCase) ||
-                                      string.Equals(row.InterfaceName, selector, StringComparison.OrdinalIgnoreCase))?.InterfaceId;
-        if (id is null) { Console.Error.WriteLine($"Stored interface '{selector}' was not found in this period."); return []; }
-    }
-    else
-    {
-        var preferred = OctetLedgerSettings.Load().PreferredInterfaceId;
-        id = rows.Any(row => string.Equals(row.InterfaceId, preferred, StringComparison.OrdinalIgnoreCase))
-            ? preferred
-            : NetworkInterfaceSelector.SelectPrimary(NetworkInterfaceReader.ReadDistinct(), preferred)?.Id;
-        id ??= rows.GroupBy(row => row.InterfaceId).OrderByDescending(group => group.Sum(row => row.TotalBytes)).First().Key;
-    }
-    return rows.Where(row => string.Equals(row.InterfaceId, id, StringComparison.OrdinalIgnoreCase)).ToArray();
-}
-
-static void PrintReport(IReadOnlyList<TrafficReportRow> rows)
-{
-    Console.WriteLine($"{"Period",16} {"Interface",-24} {"Received",12} {"Sent",12} {"Total",12} {"Average",14} {"Peak",14}");
+    Console.WriteLine($"{"Period",16} {"Interface",-24} {"Received",12} {"Sent",12} {"Total",12} {"Average",14} {"Peak avg",14}");
     Console.WriteLine(new string('-', 112));
     foreach (var row in rows)
         Console.WriteLine($"{row.Period,16} {Trim(row.InterfaceName, 24),-24} {ByteFormatter.Format(row.BytesReceived),12} " +
@@ -298,24 +338,39 @@ static void PrintReport(IReadOnlyList<TrafficReportRow> rows)
     var collector = CollectorTaskManager.GetStatus();
     if (rows.Count == 0)
     {
-        Console.WriteLine(collector.State is "Running" or "Starting, first collection pending"
-            ? "No traffic interval has been recorded yet. The collector is running; try again in about one minute."
-            : "No stored traffic yet. Install the collector with 'octetledger collector install'.");
+        Console.WriteLine($"No stored traffic was found for {scope}.");
+        if (collector.State == "Starting, first collection pending")
+            Console.WriteLine("The collector is running; its first interval is still pending.");
+        else if (collector.State is not ("Running" or "Running, collection delayed" or "Running, retrying after errors"))
+            Console.WriteLine("Automatic collection is not active. Run 'octetledger collector start'.");
     }
     else if (collector.State == "Starting, first collection pending")
     {
         Console.Error.WriteLine("Notice: the collector is running and its first collection is still pending.");
         Console.Error.WriteLine("Totals will resume automatically; check again in about one minute.");
     }
+    else if (collector.State == "Running, collection delayed")
+    {
+        Console.Error.WriteLine($"Warning: {collector.Details}");
+        Console.Error.WriteLine("The process exists, but successful collection is late; inspect collector.log.");
+    }
+    else if (collector.State == "Running, retrying after errors")
+    {
+        Console.Error.WriteLine($"Notice: {collector.Details}");
+        Console.Error.WriteLine("The collector is still running and will retry automatically.");
+    }
     else if (collector.State != "Running")
     {
         Console.Error.WriteLine($"Warning: stored totals are not updating because the collector is {collector.State.ToLowerInvariant()}.");
         Console.Error.WriteLine("Run 'octetledger collector start' to repair and restart it.");
     }
+    if (rows.Any(row => row.LongestIntervalSeconds > 90))
+        Console.Error.WriteLine("Notice: Peak avg is the highest average over an observed interval; one or more intervals exceeded 90 seconds.");
 }
 
 static int ManageCollector(string[] arguments)
 {
+    if (arguments.Length > 1) { Console.Error.WriteLine("Usage: octetledger collector [install|status|start|stop|uninstall]"); return 2; }
     var action = arguments.FirstOrDefault()?.ToLowerInvariant() ?? "status";
     try
     {
@@ -332,7 +387,10 @@ static int ManageCollector(string[] arguments)
                     : "Automatic collection installed; first collection is still pending.");
                 return 0;
             case "status":
-                var status = CollectorTaskManager.GetStatus(); Console.WriteLine($"Collector: {status.State}"); return status.Installed ? 0 : 1;
+                var status = CollectorTaskManager.GetStatus();
+                Console.WriteLine($"Collector: {status.State}");
+                if (status.Details is not null) Console.WriteLine($"  {status.Details}");
+                return status.Installed ? 0 : 1;
             case "start":
                 var startup = CollectorTaskManager.Start();
                 Console.WriteLine(startup == CollectorStartupState.Ready
@@ -350,7 +408,24 @@ static int ManageCollector(string[] arguments)
 
 static int ManageDatabase(string[] arguments)
 {
+    try
+    {
+        return ManageDatabaseCore(arguments);
+    }
+    catch (Exception exception) when (exception is ArgumentException or InvalidDataException or IOException or
+                                      UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception or
+                                      Microsoft.Data.Sqlite.SqliteException)
+    {
+        Console.Error.WriteLine(exception.Message);
+        return 1;
+    }
+}
+
+static int ManageDatabaseCore(string[] arguments)
+{
     var action = arguments.FirstOrDefault()?.ToLowerInvariant() ?? "check";
+    if ((action == "check" || action == "backup" || action == "restore") && arguments.Length > 2)
+    { Console.Error.WriteLine("Usage: octetledger database [check [path]|backup [path]|restore <path>]"); return 2; }
     switch (action)
     {
         case "check":
@@ -366,7 +441,31 @@ static int ManageDatabase(string[] arguments)
             Console.WriteLine($"Database backup created: {store.Backup(destination)}");
             return 0;
         }
-        default: Console.Error.WriteLine("Usage: octetledger database [check|backup [path]]"); return 2;
+        case "restore":
+        {
+            var source = arguments.Skip(1).FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(source))
+            { Console.Error.WriteLine("Usage: octetledger database restore <path>"); return 2; }
+            var collector = CollectorTaskManager.GetStatus();
+            var wasRunning = collector.State.StartsWith("Running", StringComparison.Ordinal) ||
+                             collector.State == "Starting, first collection pending";
+            if (wasRunning) CollectorTaskManager.Stop();
+            DatabaseRestoreResult restored;
+            try
+            {
+                restored = TrafficStore.Restore(source);
+            }
+            finally
+            {
+                if (wasRunning && collector.Installed) CollectorTaskManager.Start();
+            }
+            Console.WriteLine($"Database restored: {restored.DatabasePath}");
+            if (restored.PreviousDatabaseBackupPath is not null)
+                Console.WriteLine($"Previous database preserved: {restored.PreviousDatabaseBackupPath}");
+            if (wasRunning && collector.Installed) Console.WriteLine("Collector restarted.");
+            return 0;
+        }
+        default: Console.Error.WriteLine("Usage: octetledger database [check [path]|backup [path]|restore <path>]"); return 2;
     }
 }
 
@@ -385,6 +484,7 @@ static int ShowStatus()
     Console.WriteLine($"  Last collection    {status.LastCollectionUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "never"}");
     Console.WriteLine($"  Default interface  {selected?.Name ?? "none"}");
     Console.WriteLine($"  Collector          {collector.State}");
+    if (collector.Details is not null) Console.WriteLine($"  Collector details  {collector.Details}");
     return 0;
 }
 
@@ -400,7 +500,7 @@ static int ShowHelp()
           octetledger live [--interface <name-or-id>] [--interval <seconds>]
           octetledger total|today|hourly|daily|weekly|monthly|top [options]
           octetledger collector [install|status|start|stop|uninstall]
-          octetledger database [check|backup [path]]
+          octetledger database [check [path]|backup [path]|restore <path>]
           octetledger status|version|help
 
         Report options:
@@ -412,6 +512,7 @@ static int ShowHelp()
 
         'total' shows all traffic recorded since the first stored sample.
         Reports use one primary interface by default to avoid VPN double counting.
+        'Peak avg' is the highest average rate over a real observation interval, not an instantaneous peak.
         """);
     return 0;
 }
@@ -423,6 +524,7 @@ static int ShowVersion()
 }
 
 static int UnknownCommand(string command) { Console.Error.WriteLine($"Unknown command '{command}'. Run 'octetledger help'."); return 2; }
+static int UnexpectedArguments(string command) { Console.Error.WriteLine($"'{command}' does not accept additional arguments."); return 2; }
 
 static IReadOnlyList<NetworkInterfaceSnapshot>? SelectSnapshots(IReadOnlyList<NetworkInterfaceSnapshot> snapshots, string[] arguments)
 {
@@ -441,6 +543,38 @@ static CancellationTokenSource CreateCancellation()
 }
 
 static bool HasFlag(string[] arguments, string flag) => arguments.Contains(flag, StringComparer.OrdinalIgnoreCase);
+static DateTimeOffset LocalTimeToUtc(DateTime local)
+{
+    var unspecified = DateTime.SpecifyKind(local, DateTimeKind.Unspecified);
+    while (TimeZoneInfo.Local.IsInvalidTime(unspecified)) unspecified = unspecified.AddMinutes(1);
+    if (TimeZoneInfo.Local.IsAmbiguousTime(unspecified))
+    {
+        var offset = TimeZoneInfo.Local.GetAmbiguousTimeOffsets(unspecified).Max();
+        return new DateTimeOffset(unspecified, offset).ToUniversalTime();
+    }
+    return new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(unspecified, TimeZoneInfo.Local), TimeSpan.Zero);
+}
+static bool ValidateOptions(string[] arguments, IReadOnlyCollection<string> flags, IReadOnlyCollection<string> valueOptions)
+{
+    for (var index = 0; index < arguments.Length; index++)
+    {
+        var argument = arguments[index];
+        if (flags.Contains(argument, StringComparer.OrdinalIgnoreCase)) continue;
+        if (valueOptions.Contains(argument, StringComparer.OrdinalIgnoreCase))
+        {
+            if (index + 1 >= arguments.Length || arguments[index + 1].StartsWith('-'))
+            {
+                Console.Error.WriteLine($"Option '{argument}' requires a value.");
+                return false;
+            }
+            index++;
+            continue;
+        }
+        Console.Error.WriteLine($"Unknown option or argument '{argument}'.");
+        return false;
+    }
+    return true;
+}
 static string? ReadOption(string[] arguments, string option)
 {
     var index = Array.FindIndex(arguments, value => string.Equals(value, option, StringComparison.OrdinalIgnoreCase));

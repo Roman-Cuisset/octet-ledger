@@ -53,6 +53,7 @@ octetledger collector uninstall
 octetledger database check
 octetledger database backup
 octetledger database backup D:\Backups\octetledger.db
+octetledger database restore D:\Backups\octetledger.db
 octetledger status
 ```
 
@@ -65,6 +66,45 @@ settings live in `%LOCALAPPDATA%\OctetLedger`. Uninstalling the program preserve
 If a stored report detects that automatic collection is stopped, it prints a warning and the repair
 command. Background collection retries transient errors and records them in `collector.log` instead
 of silently exiting.
+
+Collector health is based on the latest successful collection, not only on the presence of a
+process. `Running, collection delayed` means that the process exists but no collection has
+succeeded for more than three minutes. `Running, retrying after errors` exposes repeated failures
+while the last success is still recent. The status includes consecutive errors and points to the
+log. Process control records the PID, process start time, and executable path, so another
+`octetledger` command cannot be stopped as if it were the collector.
+
+Stored traffic is attributed to the time at which the counter difference is observed. OctetLedger
+also stores the real elapsed time since the preceding observation. `Peak avg` is therefore the
+highest average over an observed interval, not an instantaneous packet-level peak. Reports warn
+when an interval exceeds 90 seconds. OctetLedger does not invent a minute-by-minute distribution
+for traffic that occurred while the computer was asleep or collection was interrupted, so that
+traffic may appear in the hour or day in which collection resumes.
+
+Report interface selection uses interfaces that actually contain data in the requested period. An
+explicit `--interface` filter is applied before `top` ranks days. Unknown options, missing option
+values, and extraneous arguments return exit code 2.
+
+## Backup and restore
+
+Create and verify a consistent SQLite backup:
+
+```powershell
+octetledger database backup D:\Backups\octetledger.db
+octetledger database check D:\Backups\octetledger.db
+```
+
+Restore it with:
+
+```powershell
+octetledger database restore D:\Backups\octetledger.db
+```
+
+Restore checks the source database, stops the collector when necessary, replaces the active
+database atomically, preserves the previous database beside it as
+`octetledger.before-restore-YYYYMMDD-HHMMSS-ID.db`, and restarts the collector. Do not copy the live
+database manually. Schema changes are versioned with SQLite `user_version`; migrations are applied
+automatically and covered by tests.
 
 ## Build from source
 
@@ -79,8 +119,15 @@ dotnet publish src/OctetLedger.Cli --configuration Release --runtime win-x64 `
   -p:DebugType=None --output artifacts/win-x64
 ```
 
-Releases contain self-contained single-file executables for Windows x64 and ARM64. Code signing is
-not currently applied: doing it correctly requires the maintainer's private code-signing certificate.
+Releases contain self-contained single-file executables for Windows x64 and ARM64. CI executes the
+x64 binary and exercises installation, update, rejection of a bad update, collector crash recovery,
+and uninstallation. ARM64 is cross-built but is not claimed as runtime-validated until it is tested
+on an ARM64 Windows runner or physical machine.
+
+Release signing is enabled automatically when the repository secrets
+`WINDOWS_SIGNING_CERTIFICATE_BASE64` and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` contain a real
+code-signing certificate and password. The workflow signs and verifies each executable before
+packaging. Without those secrets, releases remain unsigned.
 
 ## Privacy
 

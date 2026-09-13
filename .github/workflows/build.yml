@@ -49,6 +49,10 @@ jobs:
         shell: pwsh
         run: .\scripts\package.ps1 -Version ci
 
+      - name: Test install, update, rollback, and crash recovery
+        shell: pwsh
+        run: .\scripts\test-install-lifecycle.ps1 -PackagePath .\artifacts\packages\OctetLedger-ci-win-x64.zip
+
       - name: Publish ARM64 executable
         run: >-
           dotnet publish src/OctetLedger.Cli/OctetLedger.Cli.csproj

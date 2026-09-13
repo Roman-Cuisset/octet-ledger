@@ -40,6 +40,23 @@ jobs:
           -p:DebugType=None
           --output artifacts/${{ matrix.runtime }}
 
+      - name: Sign executable when release certificate is configured
+        if: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 != '' && secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD != '' }}
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'octetledger-signing.pfx'
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
+          $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if ($null -eq $signTool) { throw 'signtool.exe was not found.' }
+          & $signTool.FullName sign /fd SHA256 /f $certificatePath /p $env:SIGNING_CERTIFICATE_PASSWORD `
+            /tr http://timestamp.digicert.com /td SHA256 "artifacts/${{ matrix.runtime }}/octetledger.exe"
+          & $signTool.FullName verify /pa /v "artifacts/${{ matrix.runtime }}/octetledger.exe"
+          Remove-Item -LiteralPath $certificatePath -Force
+
       - name: Build installation package
         shell: pwsh
         run: .\scripts\package.ps1 -Version $env:GITHUB_REF_NAME.TrimStart('v') -Runtime '${{ matrix.runtime }}'

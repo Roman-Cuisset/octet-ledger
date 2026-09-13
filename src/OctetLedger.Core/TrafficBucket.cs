@@ -5,7 +5,10 @@ public sealed record TrafficBucket(
     string InterfaceName,
     DateTimeOffset MinuteUtc,
     long BytesReceived,
-    long BytesSent);
+    long BytesSent,
+    double IntervalSeconds = 60,
+    double? PeakBytesPerSecond = null,
+    double? LongestIntervalSeconds = null);
 
 public sealed record CollectionResult(
     int InterfacesObserved,

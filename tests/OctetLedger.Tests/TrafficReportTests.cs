@@ -44,6 +44,64 @@ public class TrafficReportTests
     }
 
     [Fact]
+    public void PeakUsesActualObservationInterval()
+    {
+        var bucket = new TrafficBucket("wifi", "Wi-Fi", DateTimeOffset.UtcNow, 9_000, 3_000, 600);
+
+        var row = Assert.Single(TrafficReport.Daily([bucket]));
+
+        Assert.Equal(20, row.PeakBytesPerSecond);
+        Assert.Equal(600, row.LongestIntervalSeconds);
+    }
+
+    [Fact]
+    public void InterfaceIsSelectedBeforeTopDaysAreRanked()
+    {
+        var now = DateTimeOffset.Now;
+        var buckets = new[]
+        {
+            Bucket("vpn", "VPN", now.AddDays(-1), 100_000, 0),
+            Bucket("vpn", "VPN", now.AddDays(-2), 90_000, 0),
+            Bucket("wifi", "Wi-Fi", now.AddDays(-3), 10_000, 0),
+            Bucket("wifi", "Wi-Fi", now.AddDays(-4), 9_000, 0)
+        };
+
+        var selected = TrafficReport.SelectInterface(buckets, "Wi-Fi", null);
+        var rows = TrafficReport.TopDays(selected, 2);
+
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, row => Assert.Equal("wifi", row.InterfaceId));
+    }
+
+    [Fact]
+    public void AutomaticSelectionUsesAnInterfacePresentInHistoricalData()
+    {
+        var buckets = new[]
+        {
+            new TrafficBucket("old-wifi", "Old Wi-Fi", DateTimeOffset.UtcNow, 8_000, 2_000),
+            new TrafficBucket("vpn", "VPN", DateTimeOffset.UtcNow, 1_000, 500)
+        };
+
+        var selected = TrafficReport.SelectInterface(buckets, null, "currently-active-but-absent");
+
+        Assert.All(selected, bucket => Assert.Equal("old-wifi", bucket.InterfaceId));
+    }
+
+    [Theory]
+    [InlineData(2026, 3, 8, 23 * 60 * 60)]
+    [InlineData(2026, 11, 1, 25 * 60 * 60)]
+    public void DayLengthAccountsForDaylightSavingChanges(int year, int month, int day, double expectedSeconds)
+    {
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        var start = new DateTime(year, month, day);
+        var now = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(start.AddDays(2), zone));
+
+        var seconds = TrafficReport.SecondsForRange(start, 1, zone, now);
+
+        Assert.Equal(expectedSeconds, seconds);
+    }
+
+    [Fact]
     public void JsonExportContainsNumericByteValues()
     {
         var row = new TrafficReportRow("2026-09-11", "wifi", "Wi-Fi", 100, 50, 1, 2);

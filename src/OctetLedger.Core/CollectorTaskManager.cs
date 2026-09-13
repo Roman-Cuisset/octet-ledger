@@ -57,6 +57,7 @@ internal sealed class CollectorProcessLock : IDisposable
 public static class CollectorTaskManager
 {
     private const string CollectorLockName = @"Local\OctetLedgerCollector";
+    internal static readonly TimeSpan CollectionDelayThreshold = TimeSpan.FromMinutes(3);
     private static CollectorProcessLock? collectorLock;
     public const string StartupValueName = "OctetLedger Collector";
     public static string LauncherPath => Path.Combine(AppDataPaths.DataDirectory, "collector.vbs");
@@ -64,6 +65,7 @@ public static class CollectorTaskManager
     public static string ReadyPath => Path.Combine(AppDataPaths.DataDirectory, "collector.ready");
     public static string StopPath => Path.Combine(AppDataPaths.DataDirectory, "collector.stop");
     public static string LogPath => Path.Combine(AppDataPaths.DataDirectory, "collector.log");
+    public static string ErrorStatePath => Path.Combine(AppDataPaths.DataDirectory, "collector.errors");
 
     public static CollectorTaskStatus GetStatus()
     {
@@ -71,12 +73,8 @@ public static class CollectorTaskManager
         var launcherExists = File.Exists(LauncherPath);
         var installed = registered && launcherExists;
         using var process = TryGetRunningProcess();
-        var running = process is not null;
-        var state = running
-            ? !File.Exists(ReadyPath) ? "Starting, first collection pending"
-                : installed ? "Running" : "Running, startup repair needed"
-            : installed ? "Installed, stopped" : registered || launcherExists ? "Installation needs repair" : "Not installed";
-        return new CollectorTaskStatus(installed, state);
+        var running = process is not null || IsCollectorLockHeld();
+        return DetermineStatus(registered, launcherExists, running, ReadLastSuccess(), DateTimeOffset.UtcNow, ReadConsecutiveErrors());
     }
 
     public static void Install(string executablePath)
@@ -113,8 +111,11 @@ public static class CollectorTaskManager
         }
 
         using var existingProcess = TryGetRunningProcess();
-        if (existingProcess is not null && File.Exists(ReadyPath)) return CollectorStartupState.Ready;
-        if (existingProcess is null)
+        var existingRunning = existingProcess is not null || IsCollectorLockHeld();
+        var lastSuccess = ReadLastSuccess();
+        if (existingRunning && lastSuccess is not null && DateTimeOffset.UtcNow - lastSuccess <= CollectionDelayThreshold)
+            return CollectorStartupState.Ready;
+        if (!existingRunning)
         {
             TryDeleteStopFile();
             TryDeleteReadyFile();
@@ -123,7 +124,9 @@ public static class CollectorTaskManager
         var startup = WaitForStartup(() =>
         {
             using var process = TryGetRunningProcess();
-            return (process is not null, File.Exists(ReadyPath));
+            var running = process is not null || IsCollectorLockHeld();
+            var success = ReadLastSuccess();
+            return (running, success is not null && DateTimeOffset.UtcNow - success <= CollectionDelayThreshold);
         });
         if (startup is CollectorStartupState.Ready or CollectorStartupState.Pending) return startup;
         throw new InvalidOperationException($"Collector could not be launched. See '{LogPath}' if it was created.");
@@ -134,8 +137,16 @@ public static class CollectorTaskManager
         using var process = TryGetRunningProcess();
         if (process is null)
         {
+            if (IsCollectorLockHeld())
+            {
+                File.WriteAllText(StopPath, DateTimeOffset.UtcNow.ToString("O"));
+                for (var attempt = 0; attempt < 150 && IsCollectorLockHeld(); attempt++) Thread.Sleep(100);
+                if (IsCollectorLockHeld())
+                    throw new InvalidOperationException("Collector did not stop cleanly and its process identity is unavailable. Sign out or restart Windows before retrying.");
+            }
             TryDeletePidFile();
             TryDeleteReadyFile();
+            TryDeleteErrorStateFile();
             TryDeleteStopFile();
             return;
         }
@@ -147,6 +158,7 @@ public static class CollectorTaskManager
         }
         TryDeletePidFile();
         TryDeleteReadyFile();
+        TryDeleteErrorStateFile();
         TryDeleteStopFile();
     }
 
@@ -168,7 +180,14 @@ public static class CollectorTaskManager
             Directory.CreateDirectory(AppDataPaths.DataDirectory);
             TryDeleteStopFile();
             TryDeleteReadyFile();
-            File.WriteAllText(PidPath, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            TryDeleteErrorStateFile();
+            using var current = Process.GetCurrentProcess();
+            var executable = Path.GetFullPath(Environment.ProcessPath ?? current.MainModule?.FileName
+                ?? throw new InvalidOperationException("Collector executable path is unavailable."));
+            File.WriteAllText(PidPath, string.Join('|',
+                Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                current.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                executable));
             return true;
         }
         catch
@@ -183,10 +202,8 @@ public static class CollectorTaskManager
 
     public static void MarkBackgroundReady()
     {
-        if (!File.Exists(ReadyPath))
-        {
-            File.WriteAllText(ReadyPath, DateTimeOffset.UtcNow.ToString("O"));
-        }
+        File.WriteAllText(ReadyPath, DateTimeOffset.UtcNow.ToString("O"));
+        TryDeleteErrorStateFile();
     }
 
     public static void RecordBackgroundError(Exception exception)
@@ -200,6 +217,8 @@ public static class CollectorTaskManager
             }
             File.AppendAllText(LogPath,
                 $"{DateTimeOffset.Now:O} {exception.GetType().Name}: {exception.Message}{Environment.NewLine}");
+            var count = ReadConsecutiveErrors() + 1;
+            File.WriteAllText(ErrorStatePath, $"{count}|{DateTimeOffset.UtcNow:O}|{exception.GetType().Name}");
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
@@ -209,7 +228,7 @@ public static class CollectorTaskManager
     {
         if (File.Exists(PidPath))
         {
-            var text = File.ReadAllText(PidPath);
+            var text = File.ReadAllText(PidPath).Split('|', 2)[0];
             if (int.TryParse(text, out var pid) && pid == Environment.ProcessId) TryDeletePidFile();
         }
         TryDeleteStopFile();
@@ -224,10 +243,12 @@ public static class CollectorTaskManager
         {
             try
             {
-                if (int.TryParse(File.ReadAllText(PidPath), out var pid))
+                var identity = File.ReadAllText(PidPath).Split('|', 3);
+                if (int.TryParse(identity[0], out var pid))
                 {
                     var process = Process.GetProcessById(pid);
-                    if (!process.HasExited && string.Equals(process.ProcessName, "octetledger", StringComparison.OrdinalIgnoreCase)) return process;
+                    if (IsExpectedCollectorProcess(process, identity)) return process;
+                    process.Dispose();
                 }
             }
             catch (ArgumentException) { }
@@ -235,23 +256,101 @@ public static class CollectorTaskManager
             TryDeletePidFile();
         }
 
-        var currentExecutable = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(currentExecutable)) return null;
-        foreach (var candidate in Process.GetProcessesByName("octetledger"))
-        {
-            try
-            {
-                if (candidate.Id != Environment.ProcessId &&
-                    string.Equals(candidate.MainModule?.FileName, currentExecutable, StringComparison.OrdinalIgnoreCase))
-                {
-                    return candidate;
-                }
-            }
-            catch (System.ComponentModel.Win32Exception) { }
-            catch (InvalidOperationException) { }
-            candidate.Dispose();
-        }
         return null;
+    }
+
+    private static bool IsExpectedCollectorProcess(Process process, string[] identity)
+    {
+        try
+        {
+            if (process.HasExited || !string.Equals(process.ProcessName, "octetledger", StringComparison.OrdinalIgnoreCase))
+                return false;
+            var currentExecutable = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(currentExecutable) ||
+                !string.Equals(Path.GetFullPath(process.MainModule?.FileName ?? ""), Path.GetFullPath(currentExecutable), StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (identity.Length == 3)
+            {
+                return long.TryParse(identity[1], out var startTicks) &&
+                       process.StartTime.ToUniversalTime().Ticks == startTicks &&
+                       string.Equals(Path.GetFullPath(identity[2]), Path.GetFullPath(currentExecutable), StringComparison.OrdinalIgnoreCase);
+            }
+
+            var pidWritten = File.GetLastWriteTimeUtc(PidPath);
+            return Math.Abs((pidWritten - process.StartTime.ToUniversalTime()).TotalMinutes) <= 1;
+        }
+        catch (System.ComponentModel.Win32Exception) { return false; }
+        catch (InvalidOperationException) { return false; }
+        catch (ArgumentException) { return false; }
+    }
+
+    private static bool IsCollectorLockHeld()
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        try
+        {
+            using var semaphore = Semaphore.OpenExisting(CollectorLockName);
+            if (!semaphore.WaitOne(0)) return true;
+            semaphore.Release();
+            return false;
+        }
+        catch (WaitHandleCannotBeOpenedException) { return false; }
+    }
+
+    private static DateTimeOffset? ReadLastSuccess()
+    {
+        try
+        {
+            if (!File.Exists(ReadyPath)) return null;
+            return DateTimeOffset.TryParse(File.ReadAllText(ReadyPath), out var value) ? value.ToUniversalTime() : null;
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+
+    private static int ReadConsecutiveErrors()
+    {
+        try
+        {
+            if (!File.Exists(ErrorStatePath)) return 0;
+            var text = File.ReadAllText(ErrorStatePath).Split('|', 2)[0];
+            return int.TryParse(text, out var count) && count > 0 ? count : 0;
+        }
+        catch (IOException) { return 0; }
+        catch (UnauthorizedAccessException) { return 0; }
+    }
+
+    internal static CollectorTaskStatus DetermineStatus(
+        bool registered,
+        bool launcherExists,
+        bool running,
+        DateTimeOffset? lastSuccess,
+        DateTimeOffset nowUtc,
+        int consecutiveErrors = 0)
+    {
+        var installed = registered && launcherExists;
+        if (!running)
+        {
+            var state = installed ? "Installed, stopped" : registered || launcherExists ? "Installation needs repair" : "Not installed";
+            return new CollectorTaskStatus(installed, state);
+        }
+
+        if (lastSuccess is null)
+            return new CollectorTaskStatus(installed, "Starting, first collection pending");
+
+        var age = nowUtc - lastSuccess.Value;
+        if (age > CollectionDelayThreshold)
+            return new CollectorTaskStatus(installed, "Running, collection delayed",
+                $"Last successful collection was {Math.Max(0, Math.Floor(age.TotalMinutes)):0} minutes ago." +
+                (consecutiveErrors > 0 ? $" {consecutiveErrors} consecutive collection error(s)." : "") +
+                $" See '{LogPath}'.");
+
+        if (consecutiveErrors >= 2)
+            return new CollectorTaskStatus(installed, "Running, retrying after errors",
+                $"{consecutiveErrors} consecutive collection errors; the latest successful collection is still recent. See '{LogPath}'.");
+
+        return new CollectorTaskStatus(installed, installed ? "Running" : "Running, startup repair needed");
     }
 
     private static void TryDeletePidFile()
@@ -271,6 +370,13 @@ public static class CollectorTaskManager
     private static void TryDeleteReadyFile()
     {
         try { if (File.Exists(ReadyPath)) File.Delete(ReadyPath); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private static void TryDeleteErrorStateFile()
+    {
+        try { if (File.Exists(ErrorStatePath)) File.Delete(ErrorStatePath); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }

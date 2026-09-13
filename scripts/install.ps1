@@ -42,6 +42,13 @@ if (-not $staged) {
     throw 'OctetLedger executable could not be staged.'
 }
 
+# Validate the staged executable before interrupting a working installation.
+$stagedVersion = & $stagedExecutable version 2>&1
+if ($LASTEXITCODE -ne 0 -or ($stagedVersion -join "`n") -notmatch '^OctetLedger\s+') {
+    Remove-Item -LiteralPath $stagedExecutable -Force -ErrorAction SilentlyContinue
+    throw 'The staged OctetLedger executable failed its startup validation. The existing installation was not changed.'
+}
+
 $replacementMade = $false
 try {
     if ($hadExistingInstallation) {
