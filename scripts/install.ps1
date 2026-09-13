@@ -72,6 +72,10 @@ try {
     }
     $replacementMade = $true
 
+    if ($env:OCTETLEDGER_TEST_FAIL_AFTER_REPLACEMENT -eq '1') {
+        throw 'Simulated post-replacement failure for installer rollback testing.'
+    }
+
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if ($null -eq $userPath) {
         $userPath = ''
