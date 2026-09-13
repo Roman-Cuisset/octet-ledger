@@ -50,14 +50,14 @@ try {
     }
 
     # Force a failure after replacement: the installer must restore its executable backup.
-    $originalProcessPath = $env:PATH
+    $launcherBlocker = Join-Path $testLocalAppData 'OctetLedger\collector.vbs.tmp'
+    New-Item -ItemType Directory -Path $launcherBlocker -Force | Out-Null
     $rolledBack = $false
     try {
-        $env:PATH = $packageDirectory
         try { & $installScript } catch { $rolledBack = $true }
     }
     finally {
-        $env:PATH = $originalProcessPath
+        Remove-Item -LiteralPath $launcherBlocker -Recurse -Force -ErrorAction SilentlyContinue
     }
     if (-not $rolledBack) { throw 'Forced post-replacement update failure did not occur.' }
     if ((Get-FileHash -LiteralPath $installedExecutable -Algorithm SHA256).Hash -ne $knownGoodHash) {
