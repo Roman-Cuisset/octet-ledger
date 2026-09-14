@@ -68,6 +68,55 @@ public class TrafficStoreTests
     }
 
     [Fact]
+    public void CollectRebaselinesBothDirectionsWhenEitherCounterResets()
+    {
+        var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(testDirectory, "test.db");
+        try
+        {
+            using var store = new TrafficStore(databasePath);
+            store.Collect([Snapshot(5_000, 5_000, 0)]);
+
+            var reset = store.Collect([Snapshot(100, 7_000, 1)]);
+            var resumed = store.Collect([Snapshot(600, 8_000, 2)]);
+
+            Assert.Equal(0, reset.BytesReceived + reset.BytesSent);
+            Assert.Equal(1_500, resumed.BytesReceived + resumed.BytesSent);
+            var bucket = Assert.Single(store.ReadBuckets(DateTimeOffset.UnixEpoch));
+            Assert.Equal(1_500, bucket.BytesReceived + bucket.BytesSent);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CollectRebaselinesWhenObservationTimeDoesNotAdvance()
+    {
+        var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(testDirectory, "test.db");
+        try
+        {
+            using var store = new TrafficStore(databasePath);
+            store.Collect([Snapshot(1_000, 1_000, 2)]);
+
+            var backwards = store.Collect([Snapshot(2_000, 2_000, 1)]);
+            var resumed = store.Collect([Snapshot(3_000, 4_000, 3)]);
+
+            Assert.Equal(0, backwards.BytesReceived + backwards.BytesSent);
+            Assert.Equal(3_000, resumed.BytesReceived + resumed.BytesSent);
+            Assert.Equal(120, Assert.Single(store.ReadBuckets(DateTimeOffset.UnixEpoch)).IntervalSeconds);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void CheckAndBackupProduceAHealthyIndependentDatabase()
     {
         var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
@@ -113,6 +162,43 @@ public class TrafficStoreTests
             var total = Assert.Single(store.ReadTotalReportRows(DateTimeOffset.UnixEpoch.AddHours(1)));
             Assert.Equal(20, total.PeakBytesPerSecond);
             Assert.Equal(12_000, total.TotalBytes);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CollectionRemainsExactAcrossMultipleDaysAndASleepGap()
+    {
+        var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(testDirectory, "test.db");
+        try
+        {
+            using var store = new TrafficStore(databasePath);
+            var received = 10_000L;
+            var sent = 5_000L;
+            var elapsedMinutes = 0;
+            store.Collect([Snapshot(received, sent, elapsedMinutes)]);
+
+            const int samples = 288;
+            for (var sample = 1; sample <= samples; sample++)
+            {
+                elapsedMinutes += sample == 120 ? 495 : 15;
+                received += 1_000;
+                sent += 500;
+                store.Collect([Snapshot(received, sent, elapsedMinutes)]);
+            }
+
+            var buckets = store.ReadBuckets(DateTimeOffset.UnixEpoch);
+            Assert.Equal(samples, buckets.Count);
+            Assert.Equal(samples * 1_500L, buckets.Sum(bucket => bucket.BytesReceived + bucket.BytesSent));
+            Assert.Equal(495d * 60, buckets.Max(bucket => bucket.LongestIntervalSeconds));
+            var status = store.GetStatus();
+            Assert.Equal((long)samples, status.StoredMinutes);
+            Assert.Equal(DateTimeOffset.UnixEpoch.AddMinutes(elapsedMinutes), status.LastCollectionUtc);
         }
         finally
         {
@@ -240,6 +326,70 @@ public class TrafficStoreTests
         }
         finally
         {
+            if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RestoreRejectsHealthyDatabaseFromAnotherApplication()
+    {
+        var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(testDirectory);
+        var destination = Path.Combine(testDirectory, "active.db");
+        var unrelated = Path.Combine(testDirectory, "unrelated.db");
+        try
+        {
+            using (var store = new TrafficStore(destination)) store.Collect([Snapshot(1_000, 2_000, 0)]);
+            using (var connection = new SqliteConnection($"Data Source={unrelated}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE unrelated_data (value TEXT NOT NULL);";
+                command.ExecuteNonQuery();
+            }
+
+            var check = TrafficStore.CheckIntegrity(unrelated);
+
+            Assert.False(check.IsHealthy);
+            Assert.Contains(check.Messages, message => message.Contains("required OctetLedger", StringComparison.OrdinalIgnoreCase) ||
+                                                       message.Contains("do not belong", StringComparison.OrdinalIgnoreCase));
+            Assert.Throws<InvalidDataException>(() => TrafficStore.Restore(unrelated, destination));
+            Assert.True(TrafficStore.CheckIntegrity(destination).IsHealthy);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OpeningDatabaseFromNewerVersionFailsWithoutChangingItsVersion()
+    {
+        var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(testDirectory, "future.db");
+        try
+        {
+            using (var store = new TrafficStore(databasePath)) { }
+            using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = $"PRAGMA user_version = {TrafficStore.CurrentSchemaVersion + 1};";
+                command.ExecuteNonQuery();
+            }
+
+            Assert.Throws<InvalidDataException>(() => new TrafficStore(databasePath));
+            using var inspection = new SqliteConnection($"Data Source={databasePath}");
+            inspection.Open();
+            using var version = inspection.CreateCommand();
+            version.CommandText = "PRAGMA user_version;";
+            Assert.Equal(TrafficStore.CurrentSchemaVersion + 1,
+                Convert.ToInt32(version.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
             if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true);
         }
     }

@@ -43,13 +43,20 @@ jobs:
 
   windows:
     needs: test
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: win-x64
+            runner: windows-latest
+            architecture: X64
+          - runtime: win-arm64
+            runner: windows-11-arm
+            architecture: ARM64
+    runs-on: ${{ matrix.runner }}
     env:
       SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
       SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
-    strategy:
-      matrix:
-        runtime: [win-x64, win-arm64]
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -58,6 +65,18 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
+
+      - name: Validate signing configuration
+        shell: pwsh
+        run: |
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_PASSWORD)
+          if ($hasCertificate -xor $hasPassword) {
+            throw 'Both WINDOWS_SIGNING_CERTIFICATE_BASE64 and WINDOWS_SIGNING_CERTIFICATE_PASSWORD must be configured together.'
+          }
+          if (-not $hasCertificate) {
+            Write-Warning 'No Authenticode certificate is configured; this release executable will be unsigned.'
+          }
 
       - name: Publish Windows executable
         run: >-
@@ -75,14 +94,28 @@ jobs:
         shell: pwsh
         run: |
           $certificatePath = Join-Path $env:RUNNER_TEMP 'octetledger-signing.pfx'
-          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
-          $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          if ($null -eq $signTool) { throw 'signtool.exe was not found.' }
-          & $signTool.FullName sign /fd SHA256 /f $certificatePath /p $env:SIGNING_CERTIFICATE_PASSWORD `
-            /tr http://timestamp.digicert.com /td SHA256 "artifacts/${{ matrix.runtime }}/octetledger.exe"
-          & $signTool.FullName verify /pa /v "artifacts/${{ matrix.runtime }}/octetledger.exe"
-          Remove-Item -LiteralPath $certificatePath -Force
+          try {
+            [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
+            $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName -Descending | Select-Object -First 1
+            if ($null -eq $signTool) { throw 'signtool.exe was not found.' }
+            & $signTool.FullName sign /fd SHA256 /f $certificatePath /p $env:SIGNING_CERTIFICATE_PASSWORD `
+              /tr https://timestamp.digicert.com /td SHA256 "artifacts/${{ matrix.runtime }}/octetledger.exe"
+            if ($LASTEXITCODE -ne 0) { throw "signtool sign failed with exit code $LASTEXITCODE." }
+            & $signTool.FullName verify /pa /v "artifacts/${{ matrix.runtime }}/octetledger.exe"
+            if ($LASTEXITCODE -ne 0) { throw "signtool verify failed with exit code $LASTEXITCODE." }
+          }
+          finally {
+            Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Smoke test native executable
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_ARCH -ne '${{ matrix.architecture }}') {
+            throw "Expected ${{ matrix.architecture }} runner, got $env:RUNNER_ARCH."
+          }
+          & "artifacts/${{ matrix.runtime }}/octetledger.exe" version
 
       - name: Build installation package
         shell: pwsh
@@ -115,5 +148,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME"
           artifacts/packages/*.zip
           artifacts/packages/*.sha256
+          --notes "Detailed release notes: https://github.com/${{ github.repository }}/blob/$GITHUB_REF_NAME/CHANGELOG.md"
           --generate-notes
           --verify-tag

@@ -13,7 +13,6 @@ public static class ApplicationTrafficStore
     public static void Add(DateTimeOffset capturedAt, IEnumerable<ApplicationTrafficRow> rows, string? databasePath = null)
     {
         using var connection = Open(databasePath);
-        EnsureSchema(connection);
         using var transaction = connection.BeginTransaction();
         foreach (var row in rows.Where(row => row.TotalBytes > 0))
         {
@@ -40,7 +39,6 @@ public static class ApplicationTrafficStore
     public static IReadOnlyList<ApplicationTrafficRow> ReadTop(DateTimeOffset fromUtc, int count, string? databasePath = null)
     {
         using var connection = Open(databasePath);
-        EnsureSchema(connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT process_name, SUM(bytes_received), SUM(bytes_sent)
@@ -61,21 +59,8 @@ public static class ApplicationTrafficStore
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var connection = new SqliteConnection($"Data Source={path};Pooling=False");
         connection.Open();
+        TrafficDatabaseSchema.Initialize(connection);
         return connection;
     }
 
-    private static void EnsureSchema(SqliteConnection connection)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS application_traffic_hour (
-                process_name TEXT NOT NULL,
-                hour_utc TEXT NOT NULL,
-                bytes_received INTEGER NOT NULL,
-                bytes_sent INTEGER NOT NULL,
-                PRIMARY KEY(process_name, hour_utc));
-            CREATE INDEX IF NOT EXISTS ix_application_traffic_hour_time ON application_traffic_hour(hour_utc);
-            """;
-        command.ExecuteNonQuery();
-    }
 }

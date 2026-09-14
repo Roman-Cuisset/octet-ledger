@@ -1,8 +1,45 @@
 # OctetLedger
 
-OctetLedger is a lightweight, privacy-friendly Windows network traffic statistics tool inspired
-by vnStat. It reads Windows interface counters instead of capturing packets, and stores only
-counter differences in a local SQLite database.
+[![Build](https://github.com/Roman-Cuisset/octet-ledger/actions/workflows/build.yml/badge.svg)](https://github.com/Roman-Cuisset/octet-ledger/actions/workflows/build.yml)
+[![Latest release](https://img.shields.io/github/v/release/Roman-Cuisset/octet-ledger)](https://github.com/Roman-Cuisset/octet-ledger/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Roman-Cuisset/octet-ledger/total)](https://github.com/Roman-Cuisset/octet-ledger/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**A privacy-first vnStat-style bandwidth monitor for Windows.**
+
+OctetLedger keeps a local history of upload and download usage without capturing packets. It reads
+Windows interface counters, stores only counter differences in SQLite, and turns them into useful
+hourly, daily, monthly, budget, comparison, and dashboard views.
+
+## Why OctetLedger?
+
+| | OctetLedger |
+|---|---|
+| Privacy | No sites, IP addresses, or packet contents recorded |
+| Setup | Per-user installation; no service account and no Administrator rights |
+| Overhead | One counter sample per minute; no continuous packet capture |
+| Ownership | Offline-first SQLite database under your Windows profile |
+| Reporting | CLI, JSON, CSV, budgets, comparisons, and a local dashboard |
+| Recovery | Integrity checks, automatic backups, safe updates, and rollback |
+
+The normal collector never inspects individual connections. Optional per-application estimates are
+captured only when the user explicitly starts an elevated ETW monitoring window.
+
+## Quick start
+
+1. Download the correct ZIP from the [latest release](https://github.com/Roman-Cuisset/octet-ledger/releases/latest).
+2. Extract it and run `install.cmd`.
+3. Open a new terminal:
+
+```powershell
+octetledger doctor
+octetledger today
+octetledger dashboard
+```
+
+The first sample establishes a baseline; recorded traffic appears after the next one-minute sample.
+
+![OctetLedger local 30-day dashboard with synthetic usage data](docs/images/dashboard.png)
 
 ## Install
 
@@ -110,11 +147,14 @@ minute rows; `database vacuum` reclaims SQLite space.
 
 `dashboard` serves a read-only dashboard on `http://127.0.0.1:8765` and never binds to a network
 interface. `--data-dir` selects an isolated database and settings directory for portable use.
+Portable data directories deliberately do not control the registered per-user collector: use
+explicit `collect` calls or keep `monitor` running with the same `--data-dir`.
 
-Per-application byte tracking is opt-in. `apps monitor` uses Windows kernel ETW TCP/IP and UDP/IP
-events and therefore requires an Administrator terminal. It stores hourly totals by process name;
-`apps top` reads those totals. Normal interface collection does not require elevation and does not
-capture process activity.
+Per-application tracking is opt-in. `apps monitor` uses Windows kernel ETW process, TCP/IP, and
+UDP/IP events and therefore requires an Administrator terminal. It stores hourly estimated payload
+bytes by process name only for the explicit monitoring window; `apps top` reads those totals. The
+estimates can differ from interface counters and are not billing-grade measurements. Normal
+interface collection does not require elevation and does not capture process activity.
 
 ## Machine-readable output
 
@@ -155,8 +195,8 @@ octetledger database import D:\Backups\octetledger.db
 the seven newest backups. Import checks the source database, stops the installed collector when
 necessary, replaces the active database atomically, preserves the previous database beside it as
 `octetledger.before-restore-YYYYMMDD-HHMMSS-ID.db`, and restarts the collector. Do not copy the
-live database manually. Schema changes are versioned with SQLite `user_version`; migrations are
-applied automatically and covered by tests.
+live database manually. Schema changes are transactional, versioned with SQLite `user_version`, and
+identified as OctetLedger data with SQLite `application_id`; migrations are covered by tests.
 
 ## Build from source
 
@@ -171,15 +211,15 @@ dotnet publish src/OctetLedger.Cli --configuration Release --runtime win-x64 `
   -p:DebugType=None --output artifacts/win-x64
 ```
 
-Releases contain self-contained single-file executables for Windows x64 and ARM64. CI executes the
-x64 binary and exercises installation, update, rejection of a bad update, collector crash recovery,
-and uninstallation. ARM64 is cross-built but is not claimed as runtime-validated until it is tested
-on an ARM64 Windows runner or physical machine.
+Releases contain self-contained single-file executables for Windows x64 and ARM64. CI executes both
+binaries on native GitHub-hosted Windows runners. The x64 job also exercises installation, update,
+rejection of a bad update, collector crash recovery, rollback, and uninstallation.
 
 Release signing is enabled automatically when the repository secrets
 `WINDOWS_SIGNING_CERTIFICATE_BASE64` and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` contain a real
-code-signing certificate and password. The workflow signs and verifies each executable before
-packaging. Without those secrets, releases remain unsigned.
+code-signing certificate and password. Configuration is rejected when only one secret exists. The
+workflow signs, timestamps over HTTPS, and verifies each executable before packaging, and always
+removes the temporary certificate. Without those secrets, releases remain explicitly unsigned.
 
 ## Privacy
 

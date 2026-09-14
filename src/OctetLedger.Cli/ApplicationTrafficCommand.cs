@@ -31,6 +31,7 @@ internal static class ApplicationTrafficCommand
         foreach (var row in rows)
             Console.WriteLine($"{Trim(row.ProcessName, 32),-32} {ByteFormatter.Format(row.BytesReceived),12} {ByteFormatter.Format(row.BytesSent),12} {ByteFormatter.Format(row.TotalBytes),12}");
         if (rows.Count == 0) Console.WriteLine("No application traffic recorded. Run an elevated 'octetledger apps monitor'.");
+        else Console.WriteLine("\nEstimated ETW payload bytes captured during explicit monitoring windows; totals may differ from interface counters.");
         return 0;
     }
 
@@ -54,23 +55,45 @@ internal static class ApplicationTrafficCommand
             if (processId <= 0 || size <= 0) return;
             var name = names.GetOrAdd(processId, id =>
             {
-                try { return Process.GetProcessById(id).ProcessName + ".exe"; }
-                catch (ArgumentException) { return $"pid-{id}"; }
-                catch (InvalidOperationException) { return $"pid-{id}"; }
+                try
+                {
+                    using var process = Process.GetProcessById(id);
+                    return NormalizeProcessName(process.ProcessName);
+                }
+                catch (ArgumentException) { return "unknown-process"; }
+                catch (InvalidOperationException) { return "unknown-process"; }
             });
             totals.AddOrUpdate(name,
                 _ => received ? new Counters(size, 0) : new Counters(0, size),
                 (_, current) => received ? current with { Received = current.Received + size } : current with { Sent = current.Sent + size });
         }
+        session.Source.Kernel.ProcessStart += data => names[data.ProcessID] = NormalizeProcessName(data.ProcessName);
+        session.Source.Kernel.ProcessStop += data => names.TryRemove(data.ProcessID, out _);
         session.Source.Kernel.TcpIpRecv += data => Add(data.ProcessID, data.size, true);
         session.Source.Kernel.TcpIpSend += data => Add(data.ProcessID, data.size, false);
         session.Source.Kernel.UdpIpRecv += data => Add(data.ProcessID, data.size, true);
         session.Source.Kernel.UdpIpSend += data => Add(data.ProcessID, data.size, false);
-        session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
-        Console.WriteLine($"Capturing per-application traffic for {seconds} seconds...");
+        session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP | KernelTraceEventParser.Keywords.Process);
+        Console.WriteLine($"Capturing estimated per-application payload bytes for up to {seconds} seconds. Press Ctrl+C to stop.");
+        Console.WriteLine("Only this explicit monitoring window is recorded; totals may differ from interface counters.");
         var processing = Task.Run(() => session.Source.Process());
-        await Task.Delay(TimeSpan.FromSeconds(seconds.Value));
-        session.Stop();
+        using var cancellation = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancel = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellation.Cancel();
+        };
+        Console.CancelKeyPress += cancel;
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(seconds.Value), cancellation.Token);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        finally
+        {
+            Console.CancelKeyPress -= cancel;
+            session.Stop();
+        }
         await processing;
         var rows = totals.Select(pair => new ApplicationTrafficRow(pair.Key, pair.Value.Received, pair.Value.Sent)).ToArray();
         ApplicationTrafficStore.Add(DateTimeOffset.UtcNow, rows);
@@ -79,6 +102,11 @@ internal static class ApplicationTrafficCommand
     }
 
     private static string Trim(string value, int width) => value.Length <= width ? value : value[..(width - 1)] + "…";
+    private static string NormalizeProcessName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "unknown-process";
+        return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name : name + ".exe";
+    }
     private static int Usage() { Console.Error.WriteLine("Usage: octetledger apps [top [--days N] [--count N]|monitor [--seconds N]]"); return 2; }
     private sealed record Counters(long Received, long Sent);
 }

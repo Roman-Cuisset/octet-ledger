@@ -25,6 +25,8 @@ internal static class ReportConsoleWriter
             output.WriteLine($"No stored traffic was found for {scope}.");
             if (collector.State == "Starting, first collection pending")
                 output.WriteLine("The collector is running; its first interval is still pending.");
+            else if (collector.State == "Portable/manual collection")
+                output.WriteLine("Portable data is collected manually. Run 'octetledger collect --data-dir <directory>' periodically or keep 'monitor' running.");
             else if (collector.State is not ("Running" or "Running, collection delayed" or "Running, retrying after errors"))
                 output.WriteLine("Automatic collection is not active. Run 'octetledger collector start'.");
         }
@@ -42,6 +44,10 @@ internal static class ReportConsoleWriter
         {
             error.WriteLine($"Notice: {collector.Details}");
             error.WriteLine("The collector is still running and will retry automatically.");
+        }
+        else if (collector.State == "Portable/manual collection")
+        {
+            error.WriteLine("Notice: this portable data directory updates only through explicit 'collect' or foreground 'monitor' commands.");
         }
         else if (collector.State != "Running")
         {

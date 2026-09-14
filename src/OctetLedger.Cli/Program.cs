@@ -43,7 +43,7 @@ var exitCode = command switch
     "apps" => await ApplicationTrafficCommand.RunAsync(rest),
     "status" => rest.Length == 0 ? ShowStatus() : UnexpectedArguments("status"),
     "doctor" => DiagnosticsCommand.RunDoctor(GetCurrentVersion(), rest),
-    "help" or "--help" or "-h" => rest.Length == 0 ? ShowHelp() : UnexpectedArguments("help"),
+    "help" or "--help" or "-h" => ShowHelp(rest),
     "version" or "--version" => DiagnosticsCommand.ShowVersion(GetCurrentVersion(), rest),
     _ => UnknownCommand(command)
 };
@@ -354,12 +354,20 @@ static int OutputReport(IReadOnlyList<TrafficReportRow> rows, string[] arguments
 
 static void PrintReport(IReadOnlyList<TrafficReportRow> rows, string scope)
 {
-    ReportConsoleWriter.Write(rows, scope, CollectorTaskManager.GetStatus(), Console.Out, Console.Error);
+    var collector = AppDataPaths.IsPortable
+        ? new CollectorTaskStatus(false, "Portable/manual collection")
+        : CollectorTaskManager.GetStatus();
+    ReportConsoleWriter.Write(rows, scope, collector, Console.Out, Console.Error);
 }
 
 static int ManageCollector(string[] arguments)
 {
     if (arguments.Length > 1) { Console.Error.WriteLine("Usage: octetledger collector [install|status|start|stop|uninstall]"); return 2; }
+    if (AppDataPaths.IsPortable)
+    {
+        Console.Error.WriteLine("Collector registration cannot be combined with --data-dir. Use 'octetledger collect --data-dir <directory>' or run 'monitor' in the foreground.");
+        return 2;
+    }
     var action = arguments.FirstOrDefault()?.ToLowerInvariant() ?? "status";
     try
     {
@@ -437,7 +445,9 @@ static int ManageDatabaseCore(string[] arguments)
                 var source = arguments.Skip(1).FirstOrDefault();
                 if (string.IsNullOrWhiteSpace(source))
                 { Console.Error.WriteLine("Usage: octetledger database import <path>"); return 2; }
-                var collector = CollectorTaskManager.GetStatus();
+                var collector = AppDataPaths.IsPortable
+                    ? new CollectorTaskStatus(false, "Portable/manual collection")
+                    : CollectorTaskManager.GetStatus();
                 var wasRunning = collector.Installed && (collector.State.StartsWith("Running", StringComparison.Ordinal) ||
                                  collector.State == "Starting, first collection pending");
                 if (wasRunning) CollectorTaskManager.Stop();
@@ -491,7 +501,9 @@ static int ShowStatus()
 {
     using var store = new TrafficStore();
     var status = store.GetStatus();
-    var collector = CollectorTaskManager.GetStatus();
+    var collector = AppDataPaths.IsPortable
+        ? new CollectorTaskStatus(false, "Portable/manual collection", "Run 'collect' periodically or keep 'monitor' running with this --data-dir.")
+        : CollectorTaskManager.GetStatus();
     var settings = OctetLedgerSettings.Load();
     var selected = NetworkInterfaceSelector.SelectPrimary(NetworkInterfaceReader.ReadDistinct(), settings.PreferredInterfaceId);
     Console.WriteLine("OctetLedger status");
@@ -503,40 +515,110 @@ static int ShowStatus()
     Console.WriteLine($"  Default interface  {selected?.Name ?? "none"}");
     Console.WriteLine($"  Collector          {collector.State}");
     if (collector.Details is not null) Console.WriteLine($"  Collector details  {collector.Details}");
+    Console.WriteLine($"  Data mode          {(AppDataPaths.IsPortable ? "portable" : "per-user")}");
+    Console.WriteLine($"  Database integrity {(store.CheckIntegrity().IsHealthy ? "healthy" : "FAILED")}");
+    Console.WriteLine($"  Raw data retention {settings.RetentionRawDays} days");
+    Console.WriteLine($"  Automatic backups  {(settings.AutomaticBackups ? "enabled" : "disabled")}");
     return 0;
 }
 
-static int ShowHelp()
+static int ShowHelp(string[] arguments)
 {
-    Console.WriteLine("""
-        OctetLedger — lightweight Windows network traffic statistics
+    if (arguments.Length > 1)
+    {
+        Console.Error.WriteLine("Usage: octetledger help [command]");
+        return 2;
+    }
 
-        Usage:
-          octetledger [summary] [--interface <name-or-id> | --all]
-          octetledger interfaces [--all]
-          octetledger interface [show|set <name-or-id>|clear]
-          octetledger live [--interface <name-or-id>] [--interval <seconds>]
-          octetledger total|today|hourly|daily|weekly|monthly|top [options]
-          octetledger collector [install|status|start|stop|uninstall]
-          octetledger database [check|export|import|retention|vacuum|auto-backup]
-          octetledger update [check|install|rollback|status|enable|disable]
-          octetledger budget [status|set <size>|remove]
-          octetledger compare today yesterday|this-month last-month
-          octetledger status|version [--verbose]|doctor|help
-          octetledger dashboard [--port N] [--no-open]
-          octetledger apps [top|monitor]
-          octetledger [command] --data-dir <directory>
+    var topic = arguments.FirstOrDefault()?.ToLowerInvariant();
+    var text = topic switch
+    {
+        null => """
+            OctetLedger — private Windows network usage history
 
-        Report options:
-          --hours N, --days N, --weeks N, --months N
-          --interface <name-or-id>   Choose one stored interface
-          --all                      Include every interface (may double-count VPN traffic)
-          --json                     Print machine-readable JSON
-          --csv <path>               Save CSV data
+            Start here:
+              octetledger collector install     Collect traffic automatically every minute
+              octetledger today                 Show today's recorded traffic
+              octetledger dashboard             Open the local 30-day dashboard
+              octetledger doctor                Diagnose installation and collection
 
-        'total' shows all traffic recorded since the first stored sample.
-        Reports use one primary interface by default to avoid VPN double counting.
-        """);
+            Reports:
+              total, today, hourly, daily, weekly, monthly, top
+              Run 'octetledger help reports' for filters and machine-readable output.
+
+            Management:
+              interfaces, interface, collector, database, budget, compare
+              update, status, version, doctor
+
+            Optional:
+              live                            Real-time interface rate
+              dashboard                       Read-only local web dashboard
+              apps                            Explicit elevated ETW capture by application
+              --data-dir <directory>          Isolated portable data
+
+            Run 'octetledger help <command>' for collector, database, reports, update,
+            budget, dashboard, or apps.
+            """,
+        "reports" or "total" or "today" or "hourly" or "daily" or "weekly" or "monthly" or "top" => """
+            Usage: octetledger total|today|hourly|daily|weekly|monthly|top [options]
+
+              --hours N, --days N, --weeks N, --months N
+              --interface <name-or-id>   Choose one stored interface
+              --all                      Separate rows for every interface; VPNs may overlap
+              --json                     Stable camel-case JSON output
+              --csv <path>               UTF-8 CSV output
+
+            Reports use one primary interface by default to avoid VPN double counting.
+            'total' covers all traffic recorded since the first stored sample.
+            """,
+        "collector" => """
+            Usage: octetledger collector [install|status|start|stop|uninstall]
+
+            'install' registers per-user automatic collection; no Administrator rights required.
+            Stored statistics survive collector removal and application uninstall.
+            """,
+        "database" or "db" => """
+            Usage: octetledger database <action>
+
+              check [path]               Validate SQLite integrity and OctetLedger schema
+              export [path]              Create a consistent backup
+              import <path>              Validate and atomically restore a backup
+              retention [days]           Archive old minutes into daily totals
+              vacuum                     Reclaim unused SQLite space
+              auto-backup status|enable|disable
+            """,
+        "update" => """
+            Usage: octetledger update [check|install|rollback|status|enable|disable]
+
+            Installation is always explicit. Downloads are size-limited, checksummed, validated,
+            and rollback-capable. Automatic checks only print an availability notice.
+            """,
+        "budget" => """
+            Usage: octetledger budget [status|set <size>|remove]
+
+            Examples: octetledger budget set 500GB
+                      octetledger compare this-month last-month
+            """,
+        "dashboard" => """
+            Usage: octetledger dashboard [--port N] [--no-open]
+
+            Serves a read-only dashboard on 127.0.0.1 only. It is not exposed to the network.
+            """,
+        "apps" => """
+            Usage: octetledger apps [top [--days N] [--count N]|monitor [--seconds N]]
+
+            Monitoring is opt-in and requires an elevated Administrator terminal. It records
+            estimated ETW payload bytes by process name only during explicit monitoring windows.
+            These estimates may differ from interface counters and are not billing-grade totals.
+            """,
+        _ => null
+    };
+    if (text is null)
+    {
+        Console.Error.WriteLine($"No help topic for '{topic}'. Run 'octetledger help'.");
+        return 2;
+    }
+    Console.WriteLine(text);
     return 0;
 }
 

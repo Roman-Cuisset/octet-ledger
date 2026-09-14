@@ -20,7 +20,9 @@ internal static class DiagnosticsCommand
         }
 
         var settings = OctetLedgerSettings.Load();
-        var collector = CollectorTaskManager.GetStatus();
+        var collector = AppDataPaths.IsPortable
+            ? new CollectorTaskStatus(false, "Portable/manual collection")
+            : CollectorTaskManager.GetStatus();
         Console.WriteLine($"OctetLedger {version}");
         Console.WriteLine($"Executable:    {Environment.ProcessPath ?? "unknown"}");
         Console.WriteLine($"Architecture:  {RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()}");
@@ -76,8 +78,13 @@ internal static class DiagnosticsCommand
 
         var interfaces = NetworkInterfaceReader.ReadDistinct().Count(snapshot => snapshot.Status == "Up");
         Check("Network", interfaces > 0, $"{interfaces.ToString(CultureInfo.InvariantCulture)} active interface(s)", ref failures);
-        var collector = CollectorTaskManager.GetStatus();
-        Check("Collector", collector.Installed, collector.Details is null ? collector.State : $"{collector.State}: {collector.Details}", ref failures);
+        if (AppDataPaths.IsPortable)
+            Check("Collection mode", true, "portable; use explicit collect or foreground monitor commands", ref failures);
+        else
+        {
+            var collector = CollectorTaskManager.GetStatus();
+            Check("Collector", collector.Installed, collector.Details is null ? collector.State : $"{collector.State}: {collector.Details}", ref failures);
+        }
 
         Console.WriteLine(failures == 0 ? "Result: healthy" : $"Result: {failures} problem(s) found");
         return failures == 0 ? 0 : 1;

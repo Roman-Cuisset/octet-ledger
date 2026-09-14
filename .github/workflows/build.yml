@@ -56,7 +56,21 @@ jobs:
         shell: pwsh
         run: .\scripts\test-install-lifecycle.ps1 -PackagePath .\artifacts\packages\OctetLedger-ci-win-x64.zip
 
-      - name: Publish ARM64 executable
+  arm64:
+    runs-on: windows-11-arm
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Publish native ARM64 executable
         run: >-
           dotnet publish src/OctetLedger.Cli/OctetLedger.Cli.csproj
           --configuration Release
@@ -66,6 +80,12 @@ jobs:
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:DebugType=None
           --output artifacts/win-arm64
+
+      - name: Smoke test native ARM64 executable
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_ARCH -ne 'ARM64') { throw "Expected an ARM64 runner, got $env:RUNNER_ARCH." }
+          .\artifacts\win-arm64\octetledger.exe version
 
       - name: Build ARM64 installation package
         shell: pwsh
