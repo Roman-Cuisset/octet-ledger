@@ -6,7 +6,12 @@ public sealed record OctetLedgerSettings(
     string? PreferredInterfaceId = null,
     bool CheckForUpdates = true,
     DateTimeOffset? LastUpdateCheckUtc = null,
-    string? LatestKnownVersion = null)
+    DateTimeOffset? LastSuccessfulUpdateCheckUtc = null,
+    string? LatestKnownVersion = null,
+    long? MonthlyBudgetBytes = null,
+    int RetentionRawDays = 90,
+    bool AutomaticBackups = false,
+    DateTimeOffset? LastAutomaticBackupUtc = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 

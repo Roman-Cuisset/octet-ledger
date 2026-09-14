@@ -5,8 +5,20 @@ using OctetLedger.Cli;
 using static OctetLedger.Cli.CommandLineArguments;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
-var command = args.FirstOrDefault()?.ToLowerInvariant() ?? "summary";
-var rest = args.Skip(1).ToArray();
+var effectiveArgs = args.ToList();
+var dataDirectoryIndex = effectiveArgs.FindIndex(value => string.Equals(value, "--data-dir", StringComparison.OrdinalIgnoreCase));
+if (dataDirectoryIndex >= 0)
+{
+    if (dataDirectoryIndex + 1 >= effectiveArgs.Count)
+    {
+        Console.Error.WriteLine("--data-dir requires a directory path.");
+        return 2;
+    }
+    AppDataPaths.ConfigureDataDirectory(effectiveArgs[dataDirectoryIndex + 1]);
+    effectiveArgs.RemoveRange(dataDirectoryIndex, 2);
+}
+var command = effectiveArgs.FirstOrDefault()?.ToLowerInvariant() ?? "summary";
+var rest = effectiveArgs.Skip(1).ToArray();
 var exitCode = command switch
 {
     "summary" => ShowSummary(rest),
@@ -25,9 +37,14 @@ var exitCode = command switch
     "collector" => ManageCollector(rest),
     "database" or "db" => ManageDatabase(rest),
     "update" => await UpdateCommand.RunAsync(rest, GetCurrentVersion()),
+    "budget" => BudgetCommand.Run(rest),
+    "compare" => ComparisonCommand.Run(rest),
+    "dashboard" => await DashboardCommand.RunAsync(rest),
+    "apps" => await ApplicationTrafficCommand.RunAsync(rest),
     "status" => rest.Length == 0 ? ShowStatus() : UnexpectedArguments("status"),
+    "doctor" => DiagnosticsCommand.RunDoctor(GetCurrentVersion(), rest),
     "help" or "--help" or "-h" => rest.Length == 0 ? ShowHelp() : UnexpectedArguments("help"),
-    "version" or "--version" => rest.Length == 0 ? ShowVersion() : UnexpectedArguments("version"),
+    "version" or "--version" => DiagnosticsCommand.ShowVersion(GetCurrentVersion(), rest),
     _ => UnknownCommand(command)
 };
 if (exitCode == 0 && command is "summary" or "status")
@@ -152,6 +169,7 @@ static int CollectOnce()
     Console.WriteLine($"Collected {result.InterfacesObserved} interfaces: {ByteFormatter.Format(result.BytesReceived)} received, " +
                       $"{ByteFormatter.Format(result.BytesSent)} sent.");
     if (result.BaselinesCreated > 0) Console.WriteLine($"Initialized {result.BaselinesCreated} new interface baselines.");
+    AutomaticBackup.RunIfDue(DateTimeOffset.UtcNow);
     return 0;
 }
 
@@ -191,6 +209,7 @@ static async Task<int> MonitorAsync(string[] arguments)
                     var result = store.Collect(NetworkInterfaceReader.ReadDistinct());
                     if (background) CollectorTaskManager.MarkBackgroundReady();
                     if (!quiet) Console.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}  ↓ {ByteFormatter.Format(result.BytesReceived),10}  ↑ {ByteFormatter.Format(result.BytesSent),10}");
+                    AutomaticBackup.RunIfDue(DateTimeOffset.UtcNow);
                 }
                 catch (Exception exception) when (background)
                 {
@@ -394,8 +413,8 @@ static int ManageDatabase(string[] arguments)
 static int ManageDatabaseCore(string[] arguments)
 {
     var action = arguments.FirstOrDefault()?.ToLowerInvariant() ?? "check";
-    if ((action == "check" || action == "backup" || action == "restore") && arguments.Length > 2)
-    { Console.Error.WriteLine("Usage: octetledger database [check [path]|backup [path]|restore <path>]"); return 2; }
+    if (arguments.Length > 2 || action == "vacuum" && arguments.Length > 1)
+    { Console.Error.WriteLine("Usage: octetledger database [check [path]|backup [path]|restore <path>|retention [days]|vacuum]"); return 2; }
     switch (action)
     {
         case "check":
@@ -405,6 +424,7 @@ static int ManageDatabaseCore(string[] arguments)
             if (!result.IsHealthy) foreach (var message in result.Messages) Console.WriteLine($"  {message}");
             return result.IsHealthy ? 0 : 1;
         case "backup":
+        case "export":
             {
                 var destination = arguments.Skip(1).FirstOrDefault() ?? Path.Combine(Environment.CurrentDirectory, $"OctetLedger-backup-{DateTime.Now:yyyyMMdd-HHmmss}.db");
                 using var store = new TrafficStore();
@@ -412,30 +432,58 @@ static int ManageDatabaseCore(string[] arguments)
                 return 0;
             }
         case "restore":
+        case "import":
             {
                 var source = arguments.Skip(1).FirstOrDefault();
                 if (string.IsNullOrWhiteSpace(source))
-                { Console.Error.WriteLine("Usage: octetledger database restore <path>"); return 2; }
+                { Console.Error.WriteLine("Usage: octetledger database import <path>"); return 2; }
                 var collector = CollectorTaskManager.GetStatus();
-                var wasRunning = collector.State.StartsWith("Running", StringComparison.Ordinal) ||
-                                 collector.State == "Starting, first collection pending";
+                var wasRunning = collector.Installed && (collector.State.StartsWith("Running", StringComparison.Ordinal) ||
+                                 collector.State == "Starting, first collection pending");
                 if (wasRunning) CollectorTaskManager.Stop();
                 DatabaseRestoreResult restored;
-                try
-                {
-                    restored = TrafficStore.Restore(source);
-                }
-                finally
-                {
-                    if (wasRunning && collector.Installed) CollectorTaskManager.Start();
-                }
+                try { restored = TrafficStore.Restore(source); }
+                finally { if (wasRunning && collector.Installed) CollectorTaskManager.Start(); }
                 Console.WriteLine($"Database restored: {restored.DatabasePath}");
                 if (restored.PreviousDatabaseBackupPath is not null)
                     Console.WriteLine($"Previous database preserved: {restored.PreviousDatabaseBackupPath}");
                 if (wasRunning && collector.Installed) Console.WriteLine("Collector restarted.");
                 return 0;
             }
-        default: Console.Error.WriteLine("Usage: octetledger database [check [path]|backup [path]|restore <path>]"); return 2;
+        case "retention":
+            {
+                var settings = OctetLedgerSettings.Load();
+                var days = settings.RetentionRawDays;
+                if (arguments.Length == 2 && (!int.TryParse(arguments[1], out days) || days is < 1 or > 3660))
+                { Console.Error.WriteLine("Retention days must be between 1 and 3660."); return 2; }
+                using var store = new TrafficStore();
+                var retention = store.ApplyRetention(days, DateTimeOffset.UtcNow);
+                (settings with { RetentionRawDays = days }).Save();
+                Console.WriteLine($"Archived {retention.RawMinutesArchived} raw minute rows into {retention.DailyRowsWritten} daily rows; retaining {days} raw days.");
+                return 0;
+            }
+        case "auto-backup":
+            {
+                var setting = arguments.Skip(1).FirstOrDefault()?.ToLowerInvariant() ?? "status";
+                var settings = OctetLedgerSettings.Load();
+                if (setting == "status")
+                {
+                    Console.WriteLine($"Automatic backups: {(settings.AutomaticBackups ? "enabled" : "disabled")}");
+                    Console.WriteLine($"Last backup: {settings.LastAutomaticBackupUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "never"}");
+                    Console.WriteLine($"Directory: {AutomaticBackup.BackupDirectory}");
+                    return 0;
+                }
+                if (setting is not ("enable" or "disable"))
+                { Console.Error.WriteLine("Usage: octetledger database auto-backup [status|enable|disable]"); return 2; }
+                (settings with { AutomaticBackups = setting == "enable" }).Save();
+                Console.WriteLine($"Automatic daily backups {(setting == "enable" ? "enabled" : "disabled")}.");
+                return 0;
+            }
+        case "vacuum":
+            using (var store = new TrafficStore()) store.Vacuum();
+            Console.WriteLine("Database vacuum completed.");
+            return 0;
+        default: Console.Error.WriteLine("Usage: octetledger database [check [path]|backup [path]|restore <path>|retention [days]|vacuum]"); return 2;
     }
 }
 
@@ -470,9 +518,14 @@ static int ShowHelp()
           octetledger live [--interface <name-or-id>] [--interval <seconds>]
           octetledger total|today|hourly|daily|weekly|monthly|top [options]
           octetledger collector [install|status|start|stop|uninstall]
-          octetledger database [check [path]|backup [path]|restore <path>]
-          octetledger update [check|install|status|enable|disable]
-          octetledger status|version|help
+          octetledger database [check|export|import|retention|vacuum|auto-backup]
+          octetledger update [check|install|rollback|status|enable|disable]
+          octetledger budget [status|set <size>|remove]
+          octetledger compare today yesterday|this-month last-month
+          octetledger status|version [--verbose]|doctor|help
+          octetledger dashboard [--port N] [--no-open]
+          octetledger apps [top|monitor]
+          octetledger [command] --data-dir <directory>
 
         Report options:
           --hours N, --days N, --weeks N, --months N
@@ -483,16 +536,10 @@ static int ShowHelp()
 
         'total' shows all traffic recorded since the first stored sample.
         Reports use one primary interface by default to avoid VPN double counting.
-        'Peak avg' is the highest average rate over a real observation interval, not an instantaneous peak.
         """);
     return 0;
 }
 
-static int ShowVersion()
-{
-    Console.WriteLine($"OctetLedger {GetCurrentVersion()}");
-    return 0;
-}
 
 static Version GetCurrentVersion()
 {

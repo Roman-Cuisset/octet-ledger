@@ -125,6 +125,75 @@ public class UpdateTests
         Assert.True(UpdateChecker.IsApprovedAssetUri(new Uri(value)));
     }
 
+    [Fact]
+    public async Task DownloadRejectsOversizedResponse()
+    {
+        using var client = new HttpClient(new ResponseHandler(new ByteArrayContent([1, 2, 3, 4])));
+        var installer = new UpdateInstaller(client, TimeSpan.FromSeconds(1), maximumDownloadBytes: 3);
+        var path = Path.Combine(Path.GetTempPath(), $"octetledger-download-{Guid.NewGuid():N}");
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                installer.DownloadAsync(new Uri("https://github.com/example/package"), path));
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task DownloadCancelsStalledBody()
+    {
+        using var client = new HttpClient(new ResponseHandler(new StreamContent(new StallingStream())));
+        var installer = new UpdateInstaller(client, TimeSpan.FromMilliseconds(100), UpdateInstaller.MaximumDownloadBytes);
+        var path = Path.Combine(Path.GetTempPath(), $"octetledger-download-{Guid.NewGuid():N}");
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                installer.DownloadAsync(new Uri("https://github.com/example/package"), path));
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task VersionProbeKillsNonExitingProcess()
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell.exe")
+        {
+            ArgumentList = { "-NoProfile", "-Command", "Start-Sleep -Seconds 30" },
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        })!;
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            UpdateInstaller.ReadProcessOutputAsync(process, TimeSpan.FromMilliseconds(100)));
+        Assert.True(process.HasExited);
+    }
+
+    private sealed class ResponseHandler(HttpContent content) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { RequestMessage = request, Content = content });
+    }
+
+    private sealed class StallingStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+    }
+
     private sealed class StubHandler(string json) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

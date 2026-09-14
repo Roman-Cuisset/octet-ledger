@@ -5,6 +5,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+function Get-Sha256Hex([string]$Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '') }
+    finally { $sha.Dispose(); $stream.Dispose() }
+}
 $resolvedPackage = (Resolve-Path -LiteralPath $PackagePath).Path
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("octetledger-lifecycle-" + [Guid]::NewGuid().ToString('N'))
 $packageDirectory = Join-Path $testRoot 'package'
@@ -37,7 +43,16 @@ try {
     # Exercise an in-place update with the same known-good package.
     & $installScript
     if ($LASTEXITCODE -ne 0) { throw 'In-place update failed.' }
-    $knownGoodHash = (Get-FileHash -LiteralPath $installedExecutable -Algorithm SHA256).Hash
+    $knownGoodHash = Get-Sha256Hex $installedExecutable
+    $installedRollback = Join-Path $testLocalAppData 'Programs\OctetLedger\rollback.ps1'
+    $rollbackExecutable = Join-Path $testLocalAppData 'Programs\OctetLedger\octetledger.rollback.exe'
+    if (-not (Test-Path -LiteralPath $installedRollback) -or -not (Test-Path -LiteralPath $rollbackExecutable)) {
+        throw 'In-place update did not retain rollback files.'
+    }
+    & $installedRollback
+    if ($LASTEXITCODE -ne 0 -or (Get-Sha256Hex $installedExecutable) -ne $knownGoodHash) {
+        throw 'Explicit rollback did not restore the previous executable.'
+    }
 
     # A live parent beyond the timeout must abort before collector stop or executable replacement.
     $parent = Start-Process powershell.exe -ArgumentList '-NoProfile', '-Command', 'Start-Sleep -Seconds 30' -PassThru
@@ -54,7 +69,7 @@ try {
         Stop-Process -Id $parent.Id -Force -ErrorAction SilentlyContinue
     }
     if (-not $parentTimeoutRejected) { throw 'Installer did not fail closed when its parent remained alive.' }
-    if ((Get-FileHash -LiteralPath $installedExecutable -Algorithm SHA256).Hash -ne $knownGoodHash) {
+    if ((Get-Sha256Hex $installedExecutable) -ne $knownGoodHash) {
         throw 'Working executable changed after a parent-process timeout.'
     }
 
@@ -64,7 +79,7 @@ try {
     $rejected = $false
     try { & $installScript -Source $invalidExecutable } catch { $rejected = $true }
     if (-not $rejected) { throw 'Installer accepted an invalid staged executable.' }
-    if ((Get-FileHash -LiteralPath $installedExecutable -Algorithm SHA256).Hash -ne $knownGoodHash) {
+    if ((Get-Sha256Hex $installedExecutable) -ne $knownGoodHash) {
         throw 'Working executable changed after a rejected update.'
     }
 
@@ -78,7 +93,7 @@ try {
         Remove-Item Env:OCTETLEDGER_TEST_FAIL_AFTER_REPLACEMENT -ErrorAction SilentlyContinue
     }
     if (-not $rolledBack) { throw 'Forced post-replacement update failure did not occur.' }
-    if ((Get-FileHash -LiteralPath $installedExecutable -Algorithm SHA256).Hash -ne $knownGoodHash) {
+    if ((Get-Sha256Hex $installedExecutable) -ne $knownGoodHash) {
         throw 'Installer did not restore the working executable after a post-replacement failure.'
     }
     & $installedExecutable collector start

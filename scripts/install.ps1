@@ -22,7 +22,8 @@ $installDirectory = Join-Path $env:LOCALAPPDATA 'Programs\OctetLedger'
 $installedExecutable = Join-Path $installDirectory 'octetledger.exe'
 $updateId = [Guid]::NewGuid().ToString('N')
 $stagedExecutable = Join-Path $installDirectory "octetledger.update.$updateId.exe"
-$backupExecutable = Join-Path $installDirectory "octetledger.previous.$updateId.exe"
+$operationBackup = Join-Path $installDirectory "octetledger.previous.$updateId.exe"
+$rollbackExecutable = Join-Path $installDirectory 'octetledger.rollback.exe'
 
 if ($WaitForProcessId -gt 0) {
     $parentProcess = Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue
@@ -90,7 +91,7 @@ try {
 
         for ($attempt = 1; $attempt -le 20; $attempt++) {
             try {
-                [System.IO.File]::Replace($stagedExecutable, $installedExecutable, $backupExecutable, $true)
+                [System.IO.File]::Replace($stagedExecutable, $installedExecutable, $operationBackup, $true)
                 break
             }
             catch {
@@ -116,18 +117,25 @@ try {
         $newUserPath = (($pathEntries + $installDirectory) -join ';')
         [Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
     }
+    $rollbackScript = Join-Path $PSScriptRoot 'rollback.ps1'
+    if (Test-Path -LiteralPath $rollbackScript) {
+        Copy-Item -LiteralPath $rollbackScript -Destination (Join-Path $installDirectory 'rollback.ps1') -Force
+    }
 
     Write-Host "OctetLedger installed at: $installedExecutable"
     & $installedExecutable collector install
     if ($LASTEXITCODE -ne 0) {
         throw "OctetLedger was copied, but its automatic collector could not be installed."
     }
+    if ($hadExistingInstallation -and (Test-Path -LiteralPath $operationBackup)) {
+        Move-Item -LiteralPath $operationBackup -Destination $rollbackExecutable -Force
+    }
 }
 catch {
     if ($hadExistingInstallation) {
-        if ($replacementMade -and (Test-Path -LiteralPath $backupExecutable)) {
+        if ($replacementMade -and (Test-Path -LiteralPath $operationBackup)) {
             try { & $installedExecutable collector stop 2>$null | Out-Null } catch {}
-            [System.IO.File]::Replace($backupExecutable, $installedExecutable, $null, $true)
+            [System.IO.File]::Replace($operationBackup, $installedExecutable, $null, $true)
         }
         try { & $installedExecutable collector start 2>$null | Out-Null } catch {}
     }
@@ -135,8 +143,8 @@ catch {
 }
 finally {
     Remove-Item -LiteralPath $stagedExecutable -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $operationBackup -Force -ErrorAction SilentlyContinue
 }
-Remove-Item -LiteralPath $backupExecutable -Force -ErrorAction SilentlyContinue
 Write-Host "Open a new terminal, then run: octetledger"
 if (-not [string]::IsNullOrWhiteSpace($CleanupDirectory)) {
     $resolvedCleanup = [System.IO.Path]::GetFullPath($CleanupDirectory)

@@ -51,15 +51,29 @@ octetledger collector start
 octetledger collector uninstall
 
 octetledger database check
-octetledger database backup
-octetledger database backup D:\Backups\octetledger.db
-octetledger database restore D:\Backups\octetledger.db
+octetledger database export D:\Backups\octetledger.db
+octetledger database import D:\Backups\octetledger.db
+octetledger database retention 90
+octetledger database vacuum
+octetledger database auto-backup enable
+
+octetledger budget set 500GB
+octetledger budget status
+octetledger compare today yesterday
+octetledger compare this-month last-month
+octetledger dashboard
+octetledger apps top --days 30
+octetledger apps monitor --seconds 60   # Administrator terminal required
+
+octetledger version --verbose
+octetledger doctor
 octetledger status
 octetledger update check
 octetledger update install
+octetledger update rollback
 octetledger update status
 octetledger update disable
-```
+octetledger daily --data-dir .\portable-data
 
 Reports select one primary physical interface by default, which avoids silently adding the same
 traffic once for Wi-Fi/Ethernet and again for a VPN. Use `--all` only when separate per-interface
@@ -89,6 +103,19 @@ Report interface selection uses interfaces that actually contain data in the req
 explicit `--interface` filter is applied before `top` ranks days. Unknown options, missing option
 values, and extraneous arguments return exit code 2.
 
+Monthly budgets report current usage, remaining capacity, 75/90/100-percent warnings, and a
+projection based on elapsed days. `compare` reports period-over-period change and a month-end
+projection. `database retention` preserves older totals in daily aggregates before removing raw
+minute rows; `database vacuum` reclaims SQLite space.
+
+`dashboard` serves a read-only dashboard on `http://127.0.0.1:8765` and never binds to a network
+interface. `--data-dir` selects an isolated database and settings directory for portable use.
+
+Per-application byte tracking is opt-in. `apps monitor` uses Windows kernel ETW TCP/IP and UDP/IP
+events and therefore requires an Administrator terminal. It stores hourly totals by process name;
+`apps top` reads those totals. Normal interface collection does not require elevation and does not
+capture process activity.
+
 ## Machine-readable output
 
 `--json` writes a JSON array to standard output. Each row contains stable camel-case fields:
@@ -103,36 +130,33 @@ that could be interpreted as spreadsheet formulas are prefixed with an apostroph
 ## Updates
 
 Run `octetledger update check` to query the latest stable GitHub release. `octetledger update
-install` downloads the package for the current x64 or ARM64 architecture, verifies its published
-SHA-256 checksum, rejects unsafe archive paths, validates the downloaded executable version, and
-then delegates replacement to the rollback-capable installer.
+install` downloads the package for the current x64 or ARM64 architecture, applies a body timeout
+and size limit, verifies its published SHA-256 checksum, rejects unsafe archive paths, validates
+the downloaded executable version, and then delegates replacement to the rollback-capable
+installer. The previous executable is retained for `octetledger update rollback`.
 
 Interactive `summary` and `status` commands check at most once every 24 hours and print a short
-notice when a newer version exists. Automatic checks use a two-second timeout, never make the local
-command fail, and never download or install anything. Use `octetledger update disable` or
-`octetledger update enable` to control these checks. Installation always requires the explicit
-`update install` command.
+notice when a newer version exists. Failed offline attempts are throttled too. Automatic checks
+use a two-second timeout, never make the local command fail, and never download or install
+anything. Use `octetledger update disable` or `octetledger update enable` to control these checks.
+Installation always requires the explicit `update install` command.
 
 ## Backup and restore
 
-Create and verify a consistent SQLite backup:
+`database export` creates a consistent SQLite backup; `database import` verifies and restores it:
 
 ```powershell
-octetledger database backup D:\Backups\octetledger.db
+octetledger database export D:\Backups\octetledger.db
 octetledger database check D:\Backups\octetledger.db
+octetledger database import D:\Backups\octetledger.db
 ```
 
-Restore it with:
-
-```powershell
-octetledger database restore D:\Backups\octetledger.db
-```
-
-Restore checks the source database, stops the collector when necessary, replaces the active
-database atomically, preserves the previous database beside it as
-`octetledger.before-restore-YYYYMMDD-HHMMSS-ID.db`, and restarts the collector. Do not copy the live
-database manually. Schema changes are versioned with SQLite `user_version`; migrations are applied
-automatically and covered by tests.
+`database auto-backup enable` creates at most one backup per day in the data directory and keeps
+the seven newest backups. Import checks the source database, stops the installed collector when
+necessary, replaces the active database atomically, preserves the previous database beside it as
+`octetledger.before-restore-YYYYMMDD-HHMMSS-ID.db`, and restarts the collector. Do not copy the
+live database manually. Schema changes are versioned with SQLite `user_version`; migrations are
+applied automatically and covered by tests.
 
 ## Build from source
 
@@ -159,8 +183,9 @@ packaging. Without those secrets, releases remain unsigned.
 
 ## Privacy
 
-OctetLedger stores interface identifiers, interface names, byte counters, and timestamps. It does
-not record visited sites, IP addresses, packet contents, or per-application activity.
+OctetLedger normally stores interface identifiers, interface names, byte counters, and timestamps.
+It does not record visited sites, IP addresses, or packet contents. Per-application process names
+and byte totals are stored only when the user explicitly runs the elevated `apps monitor` command.
 
 ## License
 

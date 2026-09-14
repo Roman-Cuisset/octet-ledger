@@ -274,6 +274,53 @@ public class TrafficStoreTests
         }
     }
 
+    [Fact]
+    public void RetentionArchivesOldMinutesWithoutChangingTotals()
+    {
+        var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(testDirectory, "test.db");
+        try
+        {
+            using var store = new TrafficStore(databasePath);
+            store.Collect([Snapshot(1_000, 2_000, 0)]);
+            store.Collect([Snapshot(4_000, 3_500, 1)]);
+            var before = Assert.Single(store.ReadTotalReportRows(DateTimeOffset.UtcNow)).TotalBytes;
+
+            var result = store.ApplyRetention(30, DateTimeOffset.UtcNow);
+
+            Assert.Equal(1, result.RawMinutesArchived);
+            Assert.Equal(before, Assert.Single(store.ReadTotalReportRows(DateTimeOffset.UtcNow)).TotalBytes);
+            Assert.Equal(before, Assert.Single(store.ReadBuckets(DateTimeOffset.UnixEpoch)).BytesReceived +
+                                 Assert.Single(store.ReadBuckets(DateTimeOffset.UnixEpoch)).BytesSent);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ApplicationTrafficIsAggregatedByProcess()
+    {
+        var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(testDirectory, "test.db");
+        try
+        {
+            ApplicationTrafficStore.Add(DateTimeOffset.UtcNow, [new ApplicationTrafficRow("browser.exe", 100, 50)], databasePath);
+            ApplicationTrafficStore.Add(DateTimeOffset.UtcNow, [new ApplicationTrafficRow("browser.exe", 25, 75)], databasePath);
+
+            var row = Assert.Single(ApplicationTrafficStore.ReadTop(DateTimeOffset.UtcNow.AddDays(-1), 10, databasePath));
+            Assert.Equal(125, row.BytesReceived);
+            Assert.Equal(125, row.BytesSent);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
     private static NetworkInterfaceSnapshot Snapshot(long received, long sent, int minute)
         => Snapshot("test-interface", received, sent, minute);
 

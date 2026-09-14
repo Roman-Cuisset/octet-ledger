@@ -12,6 +12,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+function Get-Sha256Hex([string]$Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '') }
+    finally { $sha.Dispose(); $stream.Dispose() }
+}
 if ([string]::IsNullOrWhiteSpace($Executable)) {
     $Executable = Join-Path $PSScriptRoot "..\artifacts\$Runtime\octetledger.exe"
 }
@@ -35,6 +41,7 @@ try {
     Copy-Item -LiteralPath $resolvedExecutable -Destination (Join-Path $packageDirectory 'octetledger.exe')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1') -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.cmd') -Destination $packageDirectory
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'rollback.ps1') -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall.ps1') -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall.cmd') -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\README.md') -Destination $packageDirectory
@@ -48,7 +55,7 @@ try {
     }
 
     Compress-Archive -Path (Join-Path $packageDirectory '*') -DestinationPath $archivePath
-    $hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hash = (Get-Sha256Hex $archivePath).ToLowerInvariant()
     Set-Content -LiteralPath $checksumPath -Value "$hash  $packageName.zip" -Encoding Ascii
 
     Write-Output "Package: $archivePath"

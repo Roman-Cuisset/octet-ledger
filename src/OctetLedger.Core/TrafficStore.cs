@@ -5,7 +5,7 @@ namespace OctetLedger.Core;
 
 public sealed class TrafficStore : IDisposable
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
     private readonly SqliteConnection connection;
 
     public TrafficStore(string? databasePath = null)
@@ -74,7 +74,13 @@ public sealed class TrafficStore : IDisposable
         command.CommandText = """
             SELECT b.interface_id, s.name, b.minute_utc, b.bytes_received, b.bytes_sent,
                    b.interval_seconds, b.peak_bytes_per_second, b.longest_interval_seconds
-            FROM traffic_minute b
+            FROM (
+                SELECT * FROM traffic_minute
+                UNION ALL
+                SELECT interface_id, day_utc AS minute_utc, bytes_received, bytes_sent,
+                       interval_seconds, peak_bytes_per_second, longest_interval_seconds
+                FROM traffic_archive_day
+            ) b
             JOIN adapter_state s ON s.interface_id = b.interface_id
             WHERE b.minute_utc >= $fromUtc
             ORDER BY b.minute_utc DESC, s.name;
@@ -103,10 +109,15 @@ public sealed class TrafficStore : IDisposable
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
+            WITH all_traffic AS (
+                SELECT interface_id, minute_utc, bytes_received, bytes_sent, peak_bytes_per_second, longest_interval_seconds FROM traffic_minute
+                UNION ALL
+                SELECT interface_id, day_utc, bytes_received, bytes_sent, peak_bytes_per_second, longest_interval_seconds FROM traffic_archive_day
+            )
             SELECT b.interface_id, s.name,
                    SUM(b.bytes_received), SUM(b.bytes_sent), MIN(b.minute_utc),
                    MAX(b.peak_bytes_per_second), MAX(b.longest_interval_seconds)
-            FROM traffic_minute b
+            FROM all_traffic b
             JOIN adapter_state s ON s.interface_id = b.interface_id
             GROUP BY b.interface_id, s.name
             ORDER BY s.name;
@@ -258,6 +269,48 @@ public sealed class TrafficStore : IDisposable
         }
     }
 
+    public RetentionResult ApplyRetention(int rawDays, DateTimeOffset nowUtc)
+    {
+        if (rawDays is < 1 or > 3660) throw new ArgumentOutOfRangeException(nameof(rawDays));
+        var cutoff = new DateTimeOffset(nowUtc.UtcDateTime.Date, TimeSpan.Zero).AddDays(-rawDays);
+        using var transaction = connection.BeginTransaction();
+        using var archive = connection.CreateCommand();
+        archive.Transaction = transaction;
+        archive.CommandText = """
+            INSERT INTO traffic_archive_day (
+                interface_id, day_utc, bytes_received, bytes_sent, interval_seconds,
+                peak_bytes_per_second, longest_interval_seconds)
+            SELECT interface_id, substr(minute_utc, 1, 10) || 'T00:00:00.0000000+00:00',
+                   SUM(bytes_received), SUM(bytes_sent), SUM(interval_seconds),
+                   MAX(peak_bytes_per_second), MAX(longest_interval_seconds)
+            FROM traffic_minute
+            WHERE minute_utc < $cutoff
+            GROUP BY interface_id, substr(minute_utc, 1, 10)
+            ON CONFLICT(interface_id, day_utc) DO UPDATE SET
+                bytes_received = bytes_received + excluded.bytes_received,
+                bytes_sent = bytes_sent + excluded.bytes_sent,
+                interval_seconds = interval_seconds + excluded.interval_seconds,
+                peak_bytes_per_second = MAX(peak_bytes_per_second, excluded.peak_bytes_per_second),
+                longest_interval_seconds = MAX(longest_interval_seconds, excluded.longest_interval_seconds);
+            """;
+        archive.Parameters.AddWithValue("$cutoff", FormatTimestamp(cutoff));
+        var days = archive.ExecuteNonQuery();
+        using var delete = connection.CreateCommand();
+        delete.Transaction = transaction;
+        delete.CommandText = "DELETE FROM traffic_minute WHERE minute_utc < $cutoff;";
+        delete.Parameters.AddWithValue("$cutoff", FormatTimestamp(cutoff));
+        var minutes = delete.ExecuteNonQuery();
+        transaction.Commit();
+        return new RetentionResult(minutes, days);
+    }
+
+    public void Vacuum()
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "VACUUM;";
+        command.ExecuteNonQuery();
+    }
+
     public void Dispose()
     {
         connection.Dispose();
@@ -314,6 +367,18 @@ public sealed class TrafficStore : IDisposable
 
                 CREATE INDEX IF NOT EXISTS ix_traffic_minute_time
                     ON traffic_minute(minute_utc);
+
+                CREATE TABLE IF NOT EXISTS traffic_archive_day (
+                    interface_id TEXT NOT NULL,
+                    day_utc TEXT NOT NULL,
+                    bytes_received INTEGER NOT NULL,
+                    bytes_sent INTEGER NOT NULL,
+                    interval_seconds REAL NOT NULL,
+                    peak_bytes_per_second REAL NOT NULL,
+                    longest_interval_seconds REAL NOT NULL,
+                    PRIMARY KEY (interface_id, day_utc),
+                    FOREIGN KEY (interface_id) REFERENCES adapter_state(interface_id)
+                );
                 """;
             schema.ExecuteNonQuery();
         }
@@ -464,3 +529,4 @@ public sealed class TrafficStore : IDisposable
 
 public sealed record DatabaseCheckResult(bool IsHealthy, IReadOnlyList<string> Messages);
 public sealed record DatabaseRestoreResult(string DatabasePath, string? PreviousDatabaseBackupPath);
+public sealed record RetentionResult(int RawMinutesArchived, int DailyRowsWritten);

@@ -11,7 +11,7 @@ internal static class UpdateCommand
     {
         if (arguments.Length > 1)
         {
-            Console.Error.WriteLine("Usage: octetledger update [check|install|status|enable|disable]");
+            Console.Error.WriteLine("Usage: octetledger update [check|install|rollback|status|enable|disable]");
             return 2;
         }
 
@@ -24,6 +24,8 @@ internal static class UpdateCommand
                     return await CheckAsync(currentVersion);
                 case "install":
                     return await InstallAsync(currentVersion);
+                case "rollback":
+                    return StartRollback();
                 case "status":
                     ShowStatus(currentVersion);
                     return 0;
@@ -36,7 +38,7 @@ internal static class UpdateCommand
                     Console.WriteLine("Automatic update checks are disabled.");
                     return 0;
                 default:
-                    Console.Error.WriteLine("Usage: octetledger update [check|install|status|enable|disable]");
+                    Console.Error.WriteLine("Usage: octetledger update [check|install|rollback|status|enable|disable]");
                     return 2;
             }
         }
@@ -59,11 +61,14 @@ internal static class UpdateCommand
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try
         {
+            var attemptedAt = DateTimeOffset.UtcNow;
+            settings = settings with { LastUpdateCheckUtc = attemptedAt };
+            settings.Save();
             using var client = CreateClient();
             var release = await new UpdateChecker(client).CheckAsync(currentVersion, cancellation.Token);
             (settings with
             {
-                LastUpdateCheckUtc = DateTimeOffset.UtcNow,
+                LastSuccessfulUpdateCheckUtc = DateTimeOffset.UtcNow,
                 LatestKnownVersion = release?.Version.ToString()
             }).Save();
             if (release is not null)
@@ -85,6 +90,7 @@ internal static class UpdateCommand
         (settings with
         {
             LastUpdateCheckUtc = DateTimeOffset.UtcNow,
+            LastSuccessfulUpdateCheckUtc = DateTimeOffset.UtcNow,
             LatestKnownVersion = release?.Version.ToString()
         }).Save();
         Console.WriteLine($"Current version: {currentVersion}");
@@ -119,8 +125,31 @@ internal static class UpdateCommand
         var settings = OctetLedgerSettings.Load();
         Console.WriteLine($"Current version:        {currentVersion}");
         Console.WriteLine($"Automatic checks:       {(settings.CheckForUpdates ? "enabled" : "disabled")}");
-        Console.WriteLine($"Last successful check:  {settings.LastUpdateCheckUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "never"}");
+        Console.WriteLine($"Last check attempt:     {settings.LastUpdateCheckUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "never"}");
+        Console.WriteLine($"Last successful check:  {settings.LastSuccessfulUpdateCheckUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "never"}");
         Console.WriteLine($"Latest known version:   {settings.LatestKnownVersion ?? "unknown"}");
+    }
+
+    private static int StartRollback()
+    {
+        var executable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(executable))
+            throw new InvalidOperationException("The current executable path is unavailable.");
+        var directory = Path.GetDirectoryName(executable)!;
+        var script = Path.Combine(directory, "rollback.ps1");
+        var previous = Path.Combine(directory, "octetledger.rollback.exe");
+        if (!File.Exists(script) || !File.Exists(previous))
+            throw new InvalidOperationException("No previous OctetLedger version is available for rollback.");
+        var startInfo = new System.Diagnostics.ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        foreach (var argument in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-WaitForProcessId", Environment.ProcessId.ToString(CultureInfo.InvariantCulture) })
+            startInfo.ArgumentList.Add(argument);
+        System.Diagnostics.Process.Start(startInfo)?.Dispose();
+        Console.WriteLine("Rollback started. This process will exit so the executable can be replaced.");
+        return 0;
     }
 
     private static void SaveUpdatePreference(bool enabled)

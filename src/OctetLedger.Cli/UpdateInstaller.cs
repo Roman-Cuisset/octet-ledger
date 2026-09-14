@@ -6,8 +6,23 @@ using OctetLedger.Core;
 
 namespace OctetLedger.Cli;
 
-internal sealed partial class UpdateInstaller(HttpClient httpClient)
+internal sealed partial class UpdateInstaller
 {
+    internal const long MaximumDownloadBytes = 128L * 1024 * 1024;
+    private static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(2);
+    private readonly HttpClient httpClient;
+    private readonly TimeSpan downloadTimeout;
+    private readonly long maximumDownloadBytes;
+
+    public UpdateInstaller(HttpClient httpClient)
+        : this(httpClient, DownloadTimeout, MaximumDownloadBytes) { }
+
+    internal UpdateInstaller(HttpClient httpClient, TimeSpan downloadTimeout, long maximumDownloadBytes)
+    {
+        this.httpClient = httpClient;
+        this.downloadTimeout = downloadTimeout;
+        this.maximumDownloadBytes = maximumDownloadBytes;
+    }
     public async Task StartInstallAsync(UpdateRelease release, CancellationToken cancellationToken = default)
     {
         var temporaryRoot = Path.Combine(Path.GetTempPath(), $"octetledger-update-{Guid.NewGuid():N}");
@@ -24,7 +39,7 @@ internal sealed partial class UpdateInstaller(HttpClient httpClient)
             ExtractArchive(archivePath, extractionPath);
             var executable = RequireSingleFile(extractionPath, "octetledger.exe");
             var installScript = RequireSingleFile(extractionPath, "install.ps1");
-            VerifyExecutableVersion(executable, release.Version);
+            await VerifyExecutableVersionAsync(executable, release.Version, cancellationToken);
 
             var startInfo = new ProcessStartInfo("powershell.exe")
             {
@@ -55,7 +70,8 @@ internal sealed partial class UpdateInstaller(HttpClient httpClient)
     {
         var match = ChecksumRegex().Match(checksumText.Trim());
         if (!match.Success) throw new InvalidDataException("The release checksum file is invalid.");
-        var actual = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archivePath)));
+        using var stream = File.OpenRead(archivePath);
+        var actual = Convert.ToHexString(SHA256.HashData(stream));
         if (!string.Equals(actual, match.Groups[1].Value, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The downloaded update failed SHA-256 verification.");
     }
@@ -82,14 +98,29 @@ internal sealed partial class UpdateInstaller(HttpClient httpClient)
 
     internal async Task DownloadAsync(Uri uri, string destination, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(downloadTimeout);
+        using var response = await httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
         response.EnsureSuccessStatusCode();
         var finalUri = response.RequestMessage?.RequestUri ?? uri;
         if (!UpdateChecker.IsApprovedAssetUri(finalUri))
             throw new InvalidDataException($"GitHub redirected the update to an unapproved URL '{finalUri}'.");
-        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
-        await using var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        await source.CopyToAsync(target, cancellationToken);
+        if (response.Content.Headers.ContentLength is long length && length > maximumDownloadBytes)
+            throw new InvalidDataException($"The update download exceeds the {maximumDownloadBytes} byte safety limit.");
+
+        await using var source = await response.Content.ReadAsStreamAsync(timeout.Token);
+        await using var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+        var buffer = new byte[81920];
+        long total = 0;
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, timeout.Token);
+            if (read == 0) break;
+            total += read;
+            if (total > maximumDownloadBytes)
+                throw new InvalidDataException($"The update download exceeds the {maximumDownloadBytes} byte safety limit.");
+            await target.WriteAsync(buffer.AsMemory(0, read), timeout.Token);
+        }
     }
 
     private static string RequireSingleFile(string root, string fileName)
@@ -100,7 +131,7 @@ internal sealed partial class UpdateInstaller(HttpClient httpClient)
             : throw new InvalidDataException($"The update package must contain exactly one {fileName}.");
     }
 
-    private static void VerifyExecutableVersion(string executable, Version expected)
+    private static async Task VerifyExecutableVersionAsync(string executable, Version expected, CancellationToken cancellationToken)
     {
         using var process = Process.Start(new ProcessStartInfo(executable, "version")
         {
@@ -109,14 +140,34 @@ internal sealed partial class UpdateInstaller(HttpClient httpClient)
             RedirectStandardError = true,
             CreateNoWindow = true
         }) ?? throw new InvalidOperationException("The downloaded OctetLedger executable could not be started.");
-        var output = process.StandardOutput.ReadToEnd();
-        if (!process.WaitForExit(TimeSpan.FromSeconds(OctetLedgerDefaults.ExternalProcessTimeoutSeconds)))
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException("The downloaded executable did not complete version validation.");
-        }
+        var (output, _) = await ReadProcessOutputAsync(
+            process,
+            TimeSpan.FromSeconds(OctetLedgerDefaults.ExternalProcessTimeoutSeconds),
+            cancellationToken);
         if (process.ExitCode != 0 || !string.Equals(output.Trim(), $"OctetLedger {expected}", StringComparison.Ordinal))
             throw new InvalidDataException($"The downloaded executable does not match release {expected}.");
+    }
+
+    internal static async Task<(string Output, string Error)> ReadProcessOutputAsync(
+        Process process,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var error = process.StandardError.ReadToEndAsync(cancellationToken);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(timeout);
+        try
+        {
+            await process.WaitForExitAsync(deadline.Token);
+            return (await output, await error);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            await process.WaitForExitAsync(CancellationToken.None);
+            throw new TimeoutException("The downloaded executable did not complete version validation.");
+        }
     }
 
     private static void TryDeleteDirectory(string path)
