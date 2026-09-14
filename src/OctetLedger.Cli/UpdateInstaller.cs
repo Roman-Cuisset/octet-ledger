@@ -80,12 +80,12 @@ internal sealed partial class UpdateInstaller(HttpClient httpClient)
         }
     }
 
-    private async Task DownloadAsync(Uri uri, string destination, CancellationToken cancellationToken)
+    internal async Task DownloadAsync(Uri uri, string destination, CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
         var finalUri = response.RequestMessage?.RequestUri ?? uri;
-        if (finalUri.Scheme != Uri.UriSchemeHttps || finalUri.Host is not ("github.com" or "objects.githubusercontent.com"))
+        if (!UpdateChecker.IsApprovedAssetUri(finalUri))
             throw new InvalidDataException($"GitHub redirected the update to an unapproved URL '{finalUri}'.");
         await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
         await using var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);

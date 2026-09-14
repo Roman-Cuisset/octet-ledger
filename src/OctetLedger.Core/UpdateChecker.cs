@@ -57,13 +57,18 @@ public sealed class UpdateChecker(HttpClient httpClient)
             : throw new InvalidDataException($"Release tag '{tag}' is not a valid version.");
     }
 
-    private static Uri RequireGitHubDownload(string value)
+    internal static Uri RequireGitHubDownload(string value)
     {
         var uri = new Uri(value, UriKind.Absolute);
-        if (uri.Scheme != Uri.UriSchemeHttps ||
-            uri.Host is not ("github.com" or "objects.githubusercontent.com"))
+        if (!IsApprovedAssetUri(uri))
             throw new InvalidDataException($"Release asset URL '{uri}' is not an approved GitHub HTTPS URL.");
         return uri;
+    }
+
+    public static bool IsApprovedAssetUri(Uri uri)
+    {
+        return uri.Scheme == Uri.UriSchemeHttps &&
+               uri.Host is "github.com" or "objects.githubusercontent.com" or "release-assets.githubusercontent.com";
     }
 
     private static Uri RequireHttpsHost(string value, string host)

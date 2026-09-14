@@ -116,6 +116,15 @@ public class UpdateTests
         }
     }
 
+    [Theory]
+    [InlineData("https://github.com/example/package")]
+    [InlineData("https://objects.githubusercontent.com/example/package")]
+    [InlineData("https://release-assets.githubusercontent.com/example/package")]
+    public void OfficialGitHubAssetHostsAreAccepted(string value)
+    {
+        Assert.True(UpdateChecker.IsApprovedAssetUri(new Uri(value)));
+    }
+
     private sealed class StubHandler(string json) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
