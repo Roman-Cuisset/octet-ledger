@@ -1,6 +1,10 @@
 [CmdletBinding()]
 param(
-    [string]$Source
+    [string]$Source,
+    [int]$WaitForProcessId = 0,
+    [ValidateRange(1, 300)]
+    [int]$WaitForProcessTimeoutSeconds = 30,
+    [string]$CleanupDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +23,24 @@ $installedExecutable = Join-Path $installDirectory 'octetledger.exe'
 $updateId = [Guid]::NewGuid().ToString('N')
 $stagedExecutable = Join-Path $installDirectory "octetledger.update.$updateId.exe"
 $backupExecutable = Join-Path $installDirectory "octetledger.previous.$updateId.exe"
+
+if ($WaitForProcessId -gt 0) {
+    $parentProcess = Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue
+    if ($null -ne $parentProcess) {
+        try {
+            Wait-Process -InputObject $parentProcess -Timeout $WaitForProcessTimeoutSeconds -ErrorAction Stop
+        }
+        catch {
+            $stillRunning = Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue
+            if ($null -ne $stillRunning) {
+                throw "The calling OctetLedger process did not exit within $WaitForProcessTimeoutSeconds seconds. The update was not installed."
+            }
+        }
+        if ($null -ne (Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue)) {
+            throw "The calling OctetLedger process is still running. The update was not installed."
+        }
+    }
+}
 
 New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
 $hadExistingInstallation = Test-Path -LiteralPath $installedExecutable
@@ -66,7 +88,16 @@ try {
                 Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
             }
 
-        [System.IO.File]::Replace($stagedExecutable, $installedExecutable, $backupExecutable, $true)
+        for ($attempt = 1; $attempt -le 20; $attempt++) {
+            try {
+                [System.IO.File]::Replace($stagedExecutable, $installedExecutable, $backupExecutable, $true)
+                break
+            }
+            catch {
+                if ($attempt -eq 20) { throw }
+                Start-Sleep -Milliseconds 250
+            }
+        }
     } else {
         Move-Item -LiteralPath $stagedExecutable -Destination $installedExecutable
     }
@@ -107,3 +138,11 @@ finally {
 }
 Remove-Item -LiteralPath $backupExecutable -Force -ErrorAction SilentlyContinue
 Write-Host "Open a new terminal, then run: octetledger"
+if (-not [string]::IsNullOrWhiteSpace($CleanupDirectory)) {
+    $resolvedCleanup = [System.IO.Path]::GetFullPath($CleanupDirectory)
+    $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    if ($resolvedCleanup.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -and
+        (Split-Path -Leaf $resolvedCleanup).StartsWith('octetledger-update-', [StringComparison]::Ordinal)) {
+        Remove-Item -LiteralPath $resolvedCleanup -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

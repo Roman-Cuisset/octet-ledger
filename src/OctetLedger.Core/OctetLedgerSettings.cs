@@ -2,7 +2,11 @@ using System.Text.Json;
 
 namespace OctetLedger.Core;
 
-public sealed record OctetLedgerSettings(string? PreferredInterfaceId = null)
+public sealed record OctetLedgerSettings(
+    string? PreferredInterfaceId = null,
+    bool CheckForUpdates = true,
+    DateTimeOffset? LastUpdateCheckUtc = null,
+    string? LatestKnownVersion = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 

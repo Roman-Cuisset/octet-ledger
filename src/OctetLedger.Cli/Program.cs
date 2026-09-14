@@ -7,7 +7,7 @@ using static OctetLedger.Cli.CommandLineArguments;
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 var command = args.FirstOrDefault()?.ToLowerInvariant() ?? "summary";
 var rest = args.Skip(1).ToArray();
-return command switch
+var exitCode = command switch
 {
     "summary" => ShowSummary(rest),
     "interfaces" or "iflist" => ShowInterfaces(rest),
@@ -24,11 +24,15 @@ return command switch
     "top" => ShowReport(ReportKind.Top, rest),
     "collector" => ManageCollector(rest),
     "database" or "db" => ManageDatabase(rest),
+    "update" => await UpdateCommand.RunAsync(rest, GetCurrentVersion()),
     "status" => rest.Length == 0 ? ShowStatus() : UnexpectedArguments("status"),
     "help" or "--help" or "-h" => rest.Length == 0 ? ShowHelp() : UnexpectedArguments("help"),
     "version" or "--version" => rest.Length == 0 ? ShowVersion() : UnexpectedArguments("version"),
     _ => UnknownCommand(command)
 };
+if (exitCode == 0 && command is "summary" or "status")
+    await UpdateCommand.MaybeNotifyAsync(GetCurrentVersion());
+return exitCode;
 
 static int ShowSummary(string[] arguments)
 {
@@ -90,12 +94,12 @@ static int ManageInterface(string[] arguments)
             if (string.IsNullOrWhiteSpace(selector)) { Console.Error.WriteLine("Usage: octetledger interface set <name-or-id>"); return 2; }
             var match = NetworkInterfaceSelector.Resolve(snapshots, selector);
             if (match is null) { Console.Error.WriteLine($"Interface '{selector}' was not found."); return 1; }
-            new OctetLedgerSettings(match.Id).Save();
+            (settings with { PreferredInterfaceId = match.Id }).Save();
             Console.WriteLine($"Default interface set to: {match.Name}");
             return 0;
         case "clear":
             if (arguments.Length > 1) { Console.Error.WriteLine("Usage: octetledger interface clear"); return 2; }
-            new OctetLedgerSettings().Save();
+            (settings with { PreferredInterfaceId = null }).Save();
             Console.WriteLine("Default interface selection is now automatic.");
             return 0;
         default:
@@ -467,6 +471,7 @@ static int ShowHelp()
           octetledger total|today|hourly|daily|weekly|monthly|top [options]
           octetledger collector [install|status|start|stop|uninstall]
           octetledger database [check [path]|backup [path]|restore <path>]
+          octetledger update [check|install|status|enable|disable]
           octetledger status|version|help
 
         Report options:
@@ -485,8 +490,14 @@ static int ShowHelp()
 
 static int ShowVersion()
 {
-    var version = Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "unknown";
-    Console.WriteLine($"OctetLedger {version}"); return 0;
+    Console.WriteLine($"OctetLedger {GetCurrentVersion()}");
+    return 0;
+}
+
+static Version GetCurrentVersion()
+{
+    var value = Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0];
+    return Version.TryParse(value, out var version) ? version : new Version(0, 0);
 }
 
 static int UnknownCommand(string command) { Console.Error.WriteLine($"Unknown command '{command}'. Run 'octetledger help'."); return 2; }

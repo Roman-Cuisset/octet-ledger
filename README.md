@@ -55,6 +55,10 @@ octetledger database backup
 octetledger database backup D:\Backups\octetledger.db
 octetledger database restore D:\Backups\octetledger.db
 octetledger status
+octetledger update check
+octetledger update install
+octetledger update status
+octetledger update disable
 ```
 
 Reports select one primary physical interface by default, which avoids silently adding the same
@@ -95,6 +99,19 @@ future minor releases, but existing field names and units will not change withou
 
 `--csv` writes the same data with invariant-culture numbers and a UTF-8 byte-order mark. Text cells
 that could be interpreted as spreadsheet formulas are prefixed with an apostrophe.
+
+## Updates
+
+Run `octetledger update check` to query the latest stable GitHub release. `octetledger update
+install` downloads the package for the current x64 or ARM64 architecture, verifies its published
+SHA-256 checksum, rejects unsafe archive paths, validates the downloaded executable version, and
+then delegates replacement to the rollback-capable installer.
+
+Interactive `summary` and `status` commands check at most once every 24 hours and print a short
+notice when a newer version exists. Automatic checks use a two-second timeout, never make the local
+command fail, and never download or install anything. Use `octetledger update disable` or
+`octetledger update enable` to control these checks. Installation always requires the explicit
+`update install` command.
 
 ## Backup and restore
 

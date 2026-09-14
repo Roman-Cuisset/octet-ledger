@@ -39,6 +39,25 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'In-place update failed.' }
     $knownGoodHash = (Get-FileHash -LiteralPath $installedExecutable -Algorithm SHA256).Hash
 
+    # A live parent beyond the timeout must abort before collector stop or executable replacement.
+    $parent = Start-Process powershell.exe -ArgumentList '-NoProfile', '-Command', 'Start-Sleep -Seconds 30' -PassThru
+    $parentTimeoutRejected = $false
+    try {
+        try {
+            & $installScript -WaitForProcessId $parent.Id -WaitForProcessTimeoutSeconds 1
+        }
+        catch {
+            $parentTimeoutRejected = $_.Exception.Message -match 'did not exit within'
+        }
+    }
+    finally {
+        Stop-Process -Id $parent.Id -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $parentTimeoutRejected) { throw 'Installer did not fail closed when its parent remained alive.' }
+    if ((Get-FileHash -LiteralPath $installedExecutable -Algorithm SHA256).Hash -ne $knownGoodHash) {
+        throw 'Working executable changed after a parent-process timeout.'
+    }
+
     # A bad staged executable must be rejected before the working binary is replaced.
     $invalidExecutable = Join-Path $testRoot 'invalid.exe'
     Set-Content -LiteralPath $invalidExecutable -Value 'invalid executable' -Encoding Ascii

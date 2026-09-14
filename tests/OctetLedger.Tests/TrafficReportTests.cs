@@ -112,19 +112,28 @@ public class TrafficReportTests
         Assert.Contains("\"interfaceName\": \"Wi-Fi\"", json, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void CsvExportNeutralizesSpreadsheetFormulas()
+    [Theory]
+    [InlineData("=")]
+    [InlineData("+")]
+    [InlineData("-")]
+    [InlineData("@")]
+    [InlineData("\t")]
+    [InlineData("\r")]
+    [InlineData("\n")]
+    public void CsvExportNeutralizesSpreadsheetFormulasInEveryTextColumn(string prefix)
     {
         var directory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
         var path = Path.Combine(directory, "report.csv");
         try
         {
-            var row = new TrafficReportRow("2026-09-11", "wifi", "=HYPERLINK(\"https://example.test\")", 100, 50, 1, 2);
+            var row = new TrafficReportRow($"{prefix}period", $"{prefix}id", $"{prefix}name", 100, 50, 1, 2);
 
             TrafficReportExporter.WriteCsv(path, [row]);
 
             var csv = File.ReadAllText(path);
-            Assert.Contains("\"'=HYPERLINK(\"\"https://example.test\"\")\"", csv, StringComparison.Ordinal);
+            Assert.Contains($"\"'{prefix}period\"", csv, StringComparison.Ordinal);
+            Assert.Contains($"\"'{prefix}id\"", csv, StringComparison.Ordinal);
+            Assert.Contains($"\"'{prefix}name\"", csv, StringComparison.Ordinal);
         }
         finally
         {
