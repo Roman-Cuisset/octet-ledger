@@ -46,9 +46,9 @@ public static class TrafficReportExporter
         foreach (var row in rows)
         {
             writer.WriteLine(string.Join(",",
-                EscapeCsv(row.Period),
-                EscapeCsv(row.InterfaceId),
-                EscapeCsv(row.InterfaceName),
+                EscapeCsv(NeutralizeSpreadsheetFormula(row.Period)),
+                EscapeCsv(NeutralizeSpreadsheetFormula(row.InterfaceId)),
+                EscapeCsv(NeutralizeSpreadsheetFormula(row.InterfaceName)),
                 row.BytesReceived.ToString(CultureInfo.InvariantCulture),
                 row.BytesSent.ToString(CultureInfo.InvariantCulture),
                 row.TotalBytes.ToString(CultureInfo.InvariantCulture),
@@ -56,6 +56,13 @@ public static class TrafficReportExporter
                 row.PeakBytesPerSecond.ToString("0.00", CultureInfo.InvariantCulture),
                 row.LongestIntervalSeconds.ToString("0.00", CultureInfo.InvariantCulture)));
         }
+    }
+
+    private static string NeutralizeSpreadsheetFormula(string value)
+    {
+        return value.Length > 0 && value[0] is '=' or '+' or '-' or '@'
+            ? $"'{value}"
+            : value;
     }
 
     private static string EscapeCsv(string value)

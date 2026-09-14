@@ -8,7 +8,41 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Verify tag matches project version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content 'src/OctetLedger.Cli/OctetLedger.Cli.csproj'
+          $projectVersion = $project.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          $tagVersion = $env:GITHUB_REF_NAME.TrimStart('v')
+          if ($projectVersion -ne $tagVersion) {
+            throw "Release tag $tagVersion does not match project version $projectVersion."
+          }
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Verify formatting
+        run: dotnet format OctetLedger.slnx --verify-no-changes --no-restore
+
+      - name: Test
+        run: dotnet test --configuration Release --no-build
+
   windows:
+    needs: test
     runs-on: windows-latest
     env:
       SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
@@ -24,13 +58,6 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-
-      - name: Build and test
-        shell: pwsh
-        run: |
-          dotnet restore
-          dotnet build --configuration Release --no-restore
-          dotnet test --configuration Release --no-build
 
       - name: Publish Windows executable
         run: >-

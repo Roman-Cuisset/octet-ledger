@@ -85,6 +85,17 @@ Report interface selection uses interfaces that actually contain data in the req
 explicit `--interface` filter is applied before `top` ranks days. Unknown options, missing option
 values, and extraneous arguments return exit code 2.
 
+## Machine-readable output
+
+`--json` writes a JSON array to standard output. Each row contains stable camel-case fields:
+`period`, `interfaceId`, `interfaceName`, `bytesReceived`, `bytesSent`, `totalBytes`,
+`averageBytesPerSecond`, `peakBytesPerSecond`, and `longestIntervalSeconds`. Byte values are integer
+counts; rates and intervals are numeric bytes-per-second and seconds. New fields may be added in
+future minor releases, but existing field names and units will not change without a major release.
+
+`--csv` writes the same data with invariant-culture numbers and a UTF-8 byte-order mark. Text cells
+that could be interpreted as spreadsheet formulas are prefixed with an apostrophe.
+
 ## Backup and restore
 
 Create and verify a consistent SQLite backup:

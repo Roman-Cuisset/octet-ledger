@@ -57,7 +57,7 @@ internal sealed class CollectorProcessLock : IDisposable
 public static class CollectorTaskManager
 {
     private const string CollectorLockName = @"Local\OctetLedgerCollector";
-    internal static readonly TimeSpan CollectionDelayThreshold = TimeSpan.FromMinutes(3);
+    internal static readonly TimeSpan CollectionDelayThreshold = TimeSpan.FromMinutes(OctetLedgerDefaults.DelayedCollectionMinutes);
     private static CollectorProcessLock? collectorLock;
     public const string StartupValueName = "OctetLedger Collector";
     public static string LauncherPath => Path.Combine(AppDataPaths.DataDirectory, "collector.vbs");
@@ -407,7 +407,7 @@ public static class CollectorTaskManager
             Dim shell, fileSystem, command, exitCode
             Set shell = CreateObject("Wscript.Shell")
             Set fileSystem = CreateObject("Scripting.FileSystemObject")
-            command = Chr(34) & "{escapedPath}" & Chr(34) & " monitor --interval 60 --quiet --background"
+            command = Chr(34) & "{escapedPath}" & Chr(34) & " monitor --interval {OctetLedgerDefaults.CollectionIntervalSeconds} --quiet --background"
             On Error Resume Next
             Do
                 Err.Clear
@@ -438,10 +438,15 @@ public static class CollectorTaskManager
         using var process = new Process { StartInfo = new ProcessStartInfo(fileName) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true } };
         foreach (var argument in arguments) process.StartInfo.ArgumentList.Add(argument);
         process.Start();
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, output + error);
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(TimeSpan.FromSeconds(OctetLedgerDefaults.ExternalProcessTimeoutSeconds)))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException($"{fileName} did not exit within {OctetLedgerDefaults.ExternalProcessTimeoutSeconds} seconds.");
+        }
+        Task.WaitAll(outputTask, errorTask);
+        return (process.ExitCode, outputTask.Result + errorTask.Result);
     }
 
     private static void EnsureSuccess((int ExitCode, string Output) result, string action)

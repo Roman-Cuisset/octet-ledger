@@ -46,36 +46,13 @@ public static class NetworkInterfaceReader
         IEnumerable<NetworkInterfaceSnapshot> snapshots)
     {
         var snapshotList = snapshots.ToArray();
-        var visibleSnapshots = snapshotList.Where(snapshot =>
-        {
-            var baseName = GetBaseAdapterName(snapshot.Name);
-            return baseName is null || !snapshotList.Any(candidate =>
-                string.Equals(candidate.Name, baseName, StringComparison.OrdinalIgnoreCase));
-        });
-        var result = new List<NetworkInterfaceSnapshot>();
-
-        foreach (var group in visibleSnapshots.GroupBy(snapshot => new
-                 {
-                     snapshot.Status,
-                     snapshot.Type,
-                     snapshot.BytesReceived,
-                     snapshot.BytesSent
-                 }))
-        {
-            if (group.Key.Status == OperationalStatus.Up.ToString())
+        return snapshotList
+            .Where(snapshot =>
             {
-                result.Add(group
-                    .OrderBy(AdapterNamePenalty)
-                    .ThenBy(snapshot => snapshot.Name.Length)
-                    .First());
-            }
-            else
-            {
-                result.AddRange(group);
-            }
-        }
-
-        return result
+                var baseName = GetBaseAdapterName(snapshot.Name);
+                return baseName is null || !snapshotList.Any(candidate =>
+                    string.Equals(candidate.Name, baseName, StringComparison.OrdinalIgnoreCase));
+            })
             .OrderByDescending(snapshot => snapshot.Status == OperationalStatus.Up.ToString())
             .ThenBy(snapshot => snapshot.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -88,10 +65,6 @@ public static class NetworkInterfaceReader
             string.Equals(snapshot.Name, selector, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static int AdapterNamePenalty(NetworkInterfaceSnapshot snapshot)
-    {
-        return GetBaseAdapterName(snapshot.Name) is null ? 0 : 1;
-    }
 
     private static string? GetBaseAdapterName(string name)
     {

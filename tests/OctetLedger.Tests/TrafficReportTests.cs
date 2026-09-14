@@ -112,6 +112,26 @@ public class TrafficReportTests
         Assert.Contains("\"interfaceName\": \"Wi-Fi\"", json, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void CsvExportNeutralizesSpreadsheetFormulas()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "report.csv");
+        try
+        {
+            var row = new TrafficReportRow("2026-09-11", "wifi", "=HYPERLINK(\"https://example.test\")", 100, 50, 1, 2);
+
+            TrafficReportExporter.WriteCsv(path, [row]);
+
+            var csv = File.ReadAllText(path);
+            Assert.Contains("\"'=HYPERLINK(\"\"https://example.test\"\")\"", csv, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static TrafficBucket Bucket(
         string interfaceId,
         string interfaceName,

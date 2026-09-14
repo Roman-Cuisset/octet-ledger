@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Reflection;
 using OctetLedger.Core;
+using OctetLedger.Cli;
+using static OctetLedger.Cli.CommandLineArguments;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 var command = args.FirstOrDefault()?.ToLowerInvariant() ?? "summary";
@@ -152,7 +154,7 @@ static int CollectOnce()
 static async Task<int> MonitorAsync(string[] arguments)
 {
     if (!ValidateOptions(arguments, ["--quiet", "--background"], ["--interval"])) return 2;
-    var intervalText = ReadOption(arguments, "--interval") ?? "60";
+    var intervalText = ReadOption(arguments, "--interval") ?? OctetLedgerDefaults.CollectionIntervalSeconds.ToString(CultureInfo.InvariantCulture);
     if (!double.TryParse(intervalText, CultureInfo.InvariantCulture, out var interval) || interval is < 1 or > 3600)
     { Console.Error.WriteLine("--interval must be between 1 and 3600 seconds."); return 2; }
     var quiet = HasFlag(arguments, "--quiet");
@@ -329,43 +331,7 @@ static int OutputReport(IReadOnlyList<TrafficReportRow> rows, string[] arguments
 
 static void PrintReport(IReadOnlyList<TrafficReportRow> rows, string scope)
 {
-    Console.WriteLine($"{"Period",16} {"Interface",-24} {"Received",12} {"Sent",12} {"Total",12} {"Average",14} {"Peak avg",14}");
-    Console.WriteLine(new string('-', 112));
-    foreach (var row in rows)
-        Console.WriteLine($"{row.Period,16} {Trim(row.InterfaceName, 24),-24} {ByteFormatter.Format(row.BytesReceived),12} " +
-                          $"{ByteFormatter.Format(row.BytesSent),12} {ByteFormatter.Format(row.TotalBytes),12} " +
-                          $"{ByteFormatter.FormatRate(row.AverageBytesPerSecond),14} {ByteFormatter.FormatRate(row.PeakBytesPerSecond),14}");
-    var collector = CollectorTaskManager.GetStatus();
-    if (rows.Count == 0)
-    {
-        Console.WriteLine($"No stored traffic was found for {scope}.");
-        if (collector.State == "Starting, first collection pending")
-            Console.WriteLine("The collector is running; its first interval is still pending.");
-        else if (collector.State is not ("Running" or "Running, collection delayed" or "Running, retrying after errors"))
-            Console.WriteLine("Automatic collection is not active. Run 'octetledger collector start'.");
-    }
-    else if (collector.State == "Starting, first collection pending")
-    {
-        Console.Error.WriteLine("Notice: the collector is running and its first collection is still pending.");
-        Console.Error.WriteLine("Totals will resume automatically; check again in about one minute.");
-    }
-    else if (collector.State == "Running, collection delayed")
-    {
-        Console.Error.WriteLine($"Warning: {collector.Details}");
-        Console.Error.WriteLine("The process exists, but successful collection is late; inspect collector.log.");
-    }
-    else if (collector.State == "Running, retrying after errors")
-    {
-        Console.Error.WriteLine($"Notice: {collector.Details}");
-        Console.Error.WriteLine("The collector is still running and will retry automatically.");
-    }
-    else if (collector.State != "Running")
-    {
-        Console.Error.WriteLine($"Warning: stored totals are not updating because the collector is {collector.State.ToLowerInvariant()}.");
-        Console.Error.WriteLine("Run 'octetledger collector start' to repair and restart it.");
-    }
-    if (rows.Any(row => row.LongestIntervalSeconds > 90))
-        Console.Error.WriteLine("Notice: Peak avg is the highest average over an observed interval; one or more intervals exceeded 90 seconds.");
+    ReportConsoleWriter.Write(rows, scope, CollectorTaskManager.GetStatus(), Console.Out, Console.Error);
 }
 
 static int ManageCollector(string[] arguments)
@@ -383,7 +349,7 @@ static int ManageCollector(string[] arguments)
                 CollectorTaskManager.Install(executable);
                 var installStartup = CollectorTaskManager.Start();
                 Console.WriteLine(installStartup == CollectorStartupState.Ready
-                    ? "Automatic collection installed and started (every 60 seconds)."
+                    ? $"Automatic collection installed and started (every {OctetLedgerDefaults.CollectionIntervalSeconds} seconds)."
                     : "Automatic collection installed; first collection is still pending.");
                 return 0;
             case "status":
@@ -402,7 +368,7 @@ static int ManageCollector(string[] arguments)
             default: Console.Error.WriteLine("Usage: octetledger collector [install|status|start|stop|uninstall]"); return 2;
         }
     }
-    catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+    catch (Exception exception) when (exception is InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception)
     { Console.Error.WriteLine(exception.Message); return 1; }
 }
 
@@ -435,36 +401,36 @@ static int ManageDatabaseCore(string[] arguments)
             if (!result.IsHealthy) foreach (var message in result.Messages) Console.WriteLine($"  {message}");
             return result.IsHealthy ? 0 : 1;
         case "backup":
-        {
-            var destination = arguments.Skip(1).FirstOrDefault() ?? Path.Combine(Environment.CurrentDirectory, $"OctetLedger-backup-{DateTime.Now:yyyyMMdd-HHmmss}.db");
-            using var store = new TrafficStore();
-            Console.WriteLine($"Database backup created: {store.Backup(destination)}");
-            return 0;
-        }
+            {
+                var destination = arguments.Skip(1).FirstOrDefault() ?? Path.Combine(Environment.CurrentDirectory, $"OctetLedger-backup-{DateTime.Now:yyyyMMdd-HHmmss}.db");
+                using var store = new TrafficStore();
+                Console.WriteLine($"Database backup created: {store.Backup(destination)}");
+                return 0;
+            }
         case "restore":
-        {
-            var source = arguments.Skip(1).FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(source))
-            { Console.Error.WriteLine("Usage: octetledger database restore <path>"); return 2; }
-            var collector = CollectorTaskManager.GetStatus();
-            var wasRunning = collector.State.StartsWith("Running", StringComparison.Ordinal) ||
-                             collector.State == "Starting, first collection pending";
-            if (wasRunning) CollectorTaskManager.Stop();
-            DatabaseRestoreResult restored;
-            try
             {
-                restored = TrafficStore.Restore(source);
+                var source = arguments.Skip(1).FirstOrDefault();
+                if (string.IsNullOrWhiteSpace(source))
+                { Console.Error.WriteLine("Usage: octetledger database restore <path>"); return 2; }
+                var collector = CollectorTaskManager.GetStatus();
+                var wasRunning = collector.State.StartsWith("Running", StringComparison.Ordinal) ||
+                                 collector.State == "Starting, first collection pending";
+                if (wasRunning) CollectorTaskManager.Stop();
+                DatabaseRestoreResult restored;
+                try
+                {
+                    restored = TrafficStore.Restore(source);
+                }
+                finally
+                {
+                    if (wasRunning && collector.Installed) CollectorTaskManager.Start();
+                }
+                Console.WriteLine($"Database restored: {restored.DatabasePath}");
+                if (restored.PreviousDatabaseBackupPath is not null)
+                    Console.WriteLine($"Previous database preserved: {restored.PreviousDatabaseBackupPath}");
+                if (wasRunning && collector.Installed) Console.WriteLine("Collector restarted.");
+                return 0;
             }
-            finally
-            {
-                if (wasRunning && collector.Installed) CollectorTaskManager.Start();
-            }
-            Console.WriteLine($"Database restored: {restored.DatabasePath}");
-            if (restored.PreviousDatabaseBackupPath is not null)
-                Console.WriteLine($"Previous database preserved: {restored.PreviousDatabaseBackupPath}");
-            if (wasRunning && collector.Installed) Console.WriteLine("Collector restarted.");
-            return 0;
-        }
         default: Console.Error.WriteLine("Usage: octetledger database [check [path]|backup [path]|restore <path>]"); return 2;
     }
 }
@@ -542,7 +508,6 @@ static CancellationTokenSource CreateCancellation()
     return cancellation;
 }
 
-static bool HasFlag(string[] arguments, string flag) => arguments.Contains(flag, StringComparer.OrdinalIgnoreCase);
 static DateTimeOffset LocalTimeToUtc(DateTime local)
 {
     var unspecified = DateTime.SpecifyKind(local, DateTimeKind.Unspecified);
@@ -554,39 +519,7 @@ static DateTimeOffset LocalTimeToUtc(DateTime local)
     }
     return new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(unspecified, TimeZoneInfo.Local), TimeSpan.Zero);
 }
-static bool ValidateOptions(string[] arguments, IReadOnlyCollection<string> flags, IReadOnlyCollection<string> valueOptions)
-{
-    for (var index = 0; index < arguments.Length; index++)
-    {
-        var argument = arguments[index];
-        if (flags.Contains(argument, StringComparer.OrdinalIgnoreCase)) continue;
-        if (valueOptions.Contains(argument, StringComparer.OrdinalIgnoreCase))
-        {
-            if (index + 1 >= arguments.Length || arguments[index + 1].StartsWith('-'))
-            {
-                Console.Error.WriteLine($"Option '{argument}' requires a value.");
-                return false;
-            }
-            index++;
-            continue;
-        }
-        Console.Error.WriteLine($"Unknown option or argument '{argument}'.");
-        return false;
-    }
-    return true;
-}
-static string? ReadOption(string[] arguments, string option)
-{
-    var index = Array.FindIndex(arguments, value => string.Equals(value, option, StringComparison.OrdinalIgnoreCase));
-    return index >= 0 && index + 1 < arguments.Length ? arguments[index + 1] : null;
-}
-static int? ReadPositiveInteger(string[] arguments, string option, int defaultValue, int minimum, int maximum)
-{
-    var text = ReadOption(arguments, option);
-    if (text is null) return defaultValue;
-    if (int.TryParse(text, out var value) && value >= minimum && value <= maximum) return value;
-    Console.Error.WriteLine($"{option} must be between {minimum} and {maximum}."); return null;
-}
+
 static string Trim(string value, int maximumLength) => value.Length <= maximumLength ? value : $"{value[..(maximumLength - 1)]}…";
 
 enum ReportKind { Total, Today, Hourly, Daily, Weekly, Monthly, Top }

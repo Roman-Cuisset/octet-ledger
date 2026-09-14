@@ -10,11 +10,15 @@
     <AssemblyName>octetledger</AssemblyName>
     <Product>OctetLedger</Product>
     <Description>Lightweight Windows network traffic statistics.</Description>
-    <Version>0.4.0</Version>
+    <Version>0.4.1</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="OctetLedger.Tests" />
+  </ItemGroup>
 
 </Project>

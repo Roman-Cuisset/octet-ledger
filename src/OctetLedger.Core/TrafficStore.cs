@@ -265,57 +265,70 @@ public sealed class TrafficStore : IDisposable
 
     private void InitializeSchema()
     {
+        using (var pragmas = connection.CreateCommand())
+        {
+            pragmas.CommandText = """
+                PRAGMA journal_mode = DELETE;
+                PRAGMA synchronous = FULL;
+                PRAGMA busy_timeout = 5000;
+                PRAGMA foreign_keys = ON;
+                """;
+            pragmas.ExecuteNonQuery();
+        }
+
+        using var transaction = connection.BeginTransaction();
         using (var versionCheck = connection.CreateCommand())
         {
+            versionCheck.Transaction = transaction;
             versionCheck.CommandText = "PRAGMA user_version;";
             var existingVersion = Convert.ToInt32(versionCheck.ExecuteScalar(), CultureInfo.InvariantCulture);
             if (existingVersion > CurrentSchemaVersion)
                 throw new InvalidDataException($"Database schema version {existingVersion} is newer than this OctetLedger version supports ({CurrentSchemaVersion}).");
         }
 
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            PRAGMA journal_mode = DELETE;
-            PRAGMA synchronous = FULL;
-            PRAGMA busy_timeout = 5000;
-            PRAGMA foreign_keys = ON;
+        using (var schema = connection.CreateCommand())
+        {
+            schema.Transaction = transaction;
+            schema.CommandText = """
+                CREATE TABLE IF NOT EXISTS adapter_state (
+                    interface_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    last_received INTEGER NOT NULL,
+                    last_sent INTEGER NOT NULL,
+                    last_seen_utc TEXT NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS adapter_state (
-                interface_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT NOT NULL,
-                type TEXT NOT NULL,
-                last_received INTEGER NOT NULL,
-                last_sent INTEGER NOT NULL,
-                last_seen_utc TEXT NOT NULL
-            );
+                CREATE TABLE IF NOT EXISTS traffic_minute (
+                    interface_id TEXT NOT NULL,
+                    minute_utc TEXT NOT NULL,
+                    bytes_received INTEGER NOT NULL,
+                    bytes_sent INTEGER NOT NULL,
+                    interval_seconds REAL NOT NULL DEFAULT 60,
+                    peak_bytes_per_second REAL NOT NULL DEFAULT 0,
+                    longest_interval_seconds REAL NOT NULL DEFAULT 60,
+                    PRIMARY KEY (interface_id, minute_utc),
+                    FOREIGN KEY (interface_id) REFERENCES adapter_state(interface_id)
+                );
 
-            CREATE TABLE IF NOT EXISTS traffic_minute (
-                interface_id TEXT NOT NULL,
-                minute_utc TEXT NOT NULL,
-                bytes_received INTEGER NOT NULL,
-                bytes_sent INTEGER NOT NULL,
-                interval_seconds REAL NOT NULL DEFAULT 60,
-                peak_bytes_per_second REAL NOT NULL DEFAULT 0,
-                longest_interval_seconds REAL NOT NULL DEFAULT 60,
-                PRIMARY KEY (interface_id, minute_utc),
-                FOREIGN KEY (interface_id) REFERENCES adapter_state(interface_id)
-            );
+                CREATE INDEX IF NOT EXISTS ix_traffic_minute_time
+                    ON traffic_minute(minute_utc);
+                """;
+            schema.ExecuteNonQuery();
+        }
 
-            CREATE INDEX IF NOT EXISTS ix_traffic_minute_time
-                ON traffic_minute(minute_utc);
-            """;
-        command.ExecuteNonQuery();
-
-        if (!ColumnExists("traffic_minute", "interval_seconds"))
+        if (!ColumnExists("traffic_minute", "interval_seconds", transaction))
         {
             using var migration = connection.CreateCommand();
+            migration.Transaction = transaction;
             migration.CommandText = "ALTER TABLE traffic_minute ADD COLUMN interval_seconds REAL NOT NULL DEFAULT 60;";
             migration.ExecuteNonQuery();
         }
-        if (!ColumnExists("traffic_minute", "peak_bytes_per_second"))
+        if (!ColumnExists("traffic_minute", "peak_bytes_per_second", transaction))
         {
             using var migration = connection.CreateCommand();
+            migration.Transaction = transaction;
             migration.CommandText = """
                 ALTER TABLE traffic_minute ADD COLUMN peak_bytes_per_second REAL NOT NULL DEFAULT 0;
                 UPDATE traffic_minute
@@ -324,9 +337,10 @@ public sealed class TrafficStore : IDisposable
                 """;
             migration.ExecuteNonQuery();
         }
-        if (!ColumnExists("traffic_minute", "longest_interval_seconds"))
+        if (!ColumnExists("traffic_minute", "longest_interval_seconds", transaction))
         {
             using var migration = connection.CreateCommand();
+            migration.Transaction = transaction;
             migration.CommandText = """
                 ALTER TABLE traffic_minute ADD COLUMN longest_interval_seconds REAL NOT NULL DEFAULT 60;
                 UPDATE traffic_minute SET longest_interval_seconds = interval_seconds;
@@ -334,9 +348,13 @@ public sealed class TrafficStore : IDisposable
             migration.ExecuteNonQuery();
         }
 
-        using var version = connection.CreateCommand();
-        version.CommandText = $"PRAGMA user_version = {CurrentSchemaVersion};";
-        version.ExecuteNonQuery();
+        using (var version = connection.CreateCommand())
+        {
+            version.Transaction = transaction;
+            version.CommandText = $"PRAGMA user_version = {CurrentSchemaVersion};";
+            version.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
     internal int ReadSchemaVersion()
@@ -346,9 +364,10 @@ public sealed class TrafficStore : IDisposable
         return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
-    private bool ColumnExists(string table, string column)
+    private bool ColumnExists(string table, string column, SqliteTransaction transaction)
     {
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = $"PRAGMA table_info({table});";
         using var reader = command.ExecuteReader();
         while (reader.Read())

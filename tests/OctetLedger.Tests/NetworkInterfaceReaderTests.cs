@@ -21,6 +21,23 @@ public class NetworkInterfaceReaderTests
         Assert.Equal("Wi-Fi", selected.Name);
     }
 
+    [Fact]
+    public void CollapseDuplicatesKeepsUnrelatedAdaptersWithEqualCounters()
+    {
+        var capturedAt = DateTimeOffset.UtcNow;
+        var snapshots = new[]
+        {
+            Snapshot("wifi", "Wi-Fi", capturedAt, 10_000),
+            Snapshot("ethernet", "Ethernet", capturedAt, 10_000)
+        };
+
+        var result = NetworkInterfaceReader.CollapseDuplicates(snapshots);
+
+        Assert.Equal(2, result.Count);
+        Assert.Contains(result, snapshot => snapshot.Id == "wifi");
+        Assert.Contains(result, snapshot => snapshot.Id == "ethernet");
+    }
+
     private static NetworkInterfaceSnapshot Snapshot(
         string id,
         string name,
