@@ -55,8 +55,21 @@ internal static class ReportConsoleWriter
             error.WriteLine("Run 'octetledger collector start' to repair and restart it.");
         }
 
-        if (rows.Any(row => row.LongestIntervalSeconds > OctetLedgerDefaults.LongObservationWarningSeconds))
-            error.WriteLine($"Notice: Peak avg is the highest average over an observed interval; one or more intervals exceeded {OctetLedgerDefaults.LongObservationWarningSeconds} seconds.");
+        var longest = rows.MaxBy(row => row.LongestIntervalSeconds);
+        if (longest is not null && longest.LongestIntervalSeconds > OctetLedgerDefaults.LongObservationWarningSeconds)
+        {
+            error.WriteLine($"Notice: longest observed interval was {FormatDuration(longest.LongestIntervalSeconds)} on {longest.InterfaceName} ({longest.Period}).");
+            error.WriteLine("Peak avg is averaged over that interval; traffic during collection gaps is assigned when collection resumes.");
+        }
+    }
+
+    private static string FormatDuration(double seconds)
+    {
+        var duration = TimeSpan.FromSeconds(seconds);
+        if (duration.TotalDays >= 1) return $"{(int)duration.TotalDays}d {duration.Hours}h";
+        if (duration.TotalHours >= 1) return $"{(int)duration.TotalHours}h {duration.Minutes}m";
+        if (duration.TotalMinutes >= 1) return $"{(int)duration.TotalMinutes}m {duration.Seconds}s";
+        return $"{Math.Max(1, (int)Math.Round(duration.TotalSeconds)):0}s";
     }
 
     private static string Trim(string value, int maximumLength) =>

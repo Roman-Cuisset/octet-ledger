@@ -112,9 +112,10 @@ octetledger update status
 octetledger update disable
 octetledger daily --data-dir .\portable-data
 
-Reports select one primary physical interface by default, which avoids silently adding the same
-traffic once for Wi-Fi/Ethernet and again for a VPN. Use `--all` only when separate per-interface
-rows are wanted; OctetLedger never merges those rows into a misleading grand total.
+Stored reports include every physical Wi-Fi/Ethernet interface by default, so switching from Wi-Fi
+to Ethernet does not hide earlier traffic. VPN and virtual adapters are excluded to avoid duplicate
+transport traffic. Use `--interface` to pin one adapter or `--all` to inspect every stored adapter;
+rows remain separate and are never merged into a misleading grand total.
 
 The first collection creates a baseline. Traffic is recorded from the next sample onward. Data and
 settings live in `%LOCALAPPDATA%\OctetLedger`. Uninstalling the program preserves these files.
@@ -136,9 +137,9 @@ when an interval exceeds 90 seconds. OctetLedger does not invent a minute-by-min
 for traffic that occurred while the computer was asleep or collection was interrupted, so that
 traffic may appear in the hour or day in which collection resumes.
 
-Report interface selection uses interfaces that actually contain data in the requested period. An
-explicit `--interface` filter is applied before `top` ranks days. Unknown options, missing option
-values, and extraneous arguments return exit code 2.
+Report interface selection uses physical interfaces that actually contain data in the requested
+period. An explicit `--interface` filter is applied before `top` ranks days. Unknown options,
+missing option values, and extraneous arguments return exit code 2.
 
 Monthly budgets report current usage, remaining capacity, 75/90/100-percent warnings, and a
 projection based on elapsed days. `compare` reports period-over-period change and a month-end

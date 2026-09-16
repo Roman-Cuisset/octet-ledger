@@ -8,7 +8,9 @@ public sealed record TrafficBucket(
     long BytesSent,
     double IntervalSeconds = 60,
     double? PeakBytesPerSecond = null,
-    double? LongestIntervalSeconds = null);
+    double? LongestIntervalSeconds = null,
+    string InterfaceDescription = "",
+    string InterfaceType = "");
 
 public sealed record CollectionResult(
     int InterfacesObserved,

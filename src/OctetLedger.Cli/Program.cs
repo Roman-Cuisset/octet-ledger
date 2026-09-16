@@ -304,7 +304,9 @@ static int ShowReport(ReportKind kind, string[] arguments)
             totalRows = TrafficReport.SelectInterfaceRows(totalRows, selector, OctetLedgerSettings.Load().PreferredInterfaceId);
             totalScope = selector is not null
                 ? $"interface '{selector}' across all recorded history"
-                : totalRows.Count > 0 ? $"historical interface '{totalRows[0].InterfaceName}' across all recorded history" : "all recorded history";
+                : totalRows.Select(row => row.InterfaceId).Distinct(StringComparer.OrdinalIgnoreCase).Take(2).Count() > 1
+                    ? "physical interfaces across all recorded history"
+                    : totalRows.Count > 0 ? $"historical interface '{totalRows[0].InterfaceName}' across all recorded history" : "all recorded history";
         }
         return OutputReport(totalRows, arguments, totalScope);
     }
@@ -323,7 +325,9 @@ static int ShowReport(ReportKind kind, string[] arguments)
         buckets = TrafficReport.SelectInterface(allBuckets, selector, OctetLedgerSettings.Load().PreferredInterfaceId);
         scope = selector is not null
             ? $"interface '{selector}' in the requested period"
-            : buckets.Count > 0 ? $"historical interface '{buckets[0].InterfaceName}' in the requested period" : "the requested period";
+            : buckets.Select(bucket => bucket.InterfaceId).Distinct(StringComparer.OrdinalIgnoreCase).Take(2).Count() > 1
+                ? "physical interfaces in the requested period"
+                : buckets.Count > 0 ? $"historical interface '{buckets[0].InterfaceName}' in the requested period" : "the requested period";
     }
     IReadOnlyList<TrafficReportRow> rows = kind switch
     {
@@ -568,8 +572,8 @@ static int ShowHelp(string[] arguments)
               --json                     Stable camel-case JSON output
               --csv <path>               UTF-8 CSV output
 
-            Reports use one primary interface by default to avoid VPN double counting.
-            'total' covers all traffic recorded since the first stored sample.
+            Reports include physical Wi-Fi/Ethernet history by default and exclude VPN/virtual
+            adapters to avoid duplicate transport traffic. 'total' covers all recorded history.
             """,
         "collector" => """
             Usage: octetledger collector [install|status|start|stop|uninstall]

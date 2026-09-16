@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1
+
+- Keep separate rows for every physical Wi-Fi/Ethernet interface in default stored reports, so switching interfaces cannot hide earlier traffic.
+- Continue excluding VPN and virtual adapters by default to avoid duplicate transport traffic; `--all` still exposes every adapter.
+- Report the exact longest collection interval, interface, and period instead of only emitting a generic gap notice.
+
 ## 0.6.0
 
 ### Reliability

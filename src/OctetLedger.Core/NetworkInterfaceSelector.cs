@@ -2,6 +2,24 @@ namespace OctetLedger.Core;
 
 public static class NetworkInterfaceSelector
 {
+    private static readonly string[] VirtualMarkers =
+    [
+        "Bluetooth",
+        "Hyper-V",
+        "IP-HTTPS",
+        "Npcap",
+        "Tailscale",
+        "Teredo",
+        "Tunnel",
+        "Virtual",
+        "VirtualBox",
+        "VMware",
+        "VPN",
+        "vEthernet",
+        "vSwitch",
+        "WSL"
+    ];
+
     public static NetworkInterfaceSnapshot? SelectPrimary(
         IEnumerable<NetworkInterfaceSnapshot> snapshots,
         string? preferredInterfaceId = null)
@@ -9,7 +27,7 @@ public static class NetworkInterfaceSelector
         var active = snapshots
             .Where(snapshot =>
                 snapshot.Status == "Up" &&
-                snapshot.Type is not ("Loopback" or "Tunnel") &&
+                IsLikelyPhysical(snapshot.Name, snapshot.Description, snapshot.Type) &&
                 snapshot.BytesReceived + snapshot.BytesSent > 0)
             .ToArray();
 
@@ -24,9 +42,7 @@ public static class NetworkInterfaceSelector
         }
 
         return active
-            .OrderByDescending(snapshot => snapshot.Type is "Wireless80211" or "Ethernet")
-            .ThenBy(snapshot => IsVirtual(snapshot.Name))
-            .ThenByDescending(snapshot => snapshot.BytesReceived + snapshot.BytesSent)
+            .OrderByDescending(snapshot => snapshot.BytesReceived + snapshot.BytesSent)
             .FirstOrDefault();
     }
 
@@ -39,11 +55,12 @@ public static class NetworkInterfaceSelector
             string.Equals(snapshot.Name, selector, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static bool IsVirtual(string name)
+    public static bool IsLikelyPhysical(string name, string description, string type)
     {
-        return name.StartsWith("vEthernet", StringComparison.OrdinalIgnoreCase) ||
-               name.StartsWith("vSwitch", StringComparison.OrdinalIgnoreCase) ||
-               name.Contains("Tailscale", StringComparison.OrdinalIgnoreCase) ||
-               name.Contains("VPN", StringComparison.OrdinalIgnoreCase);
+        if (type != "Wireless80211" && !type.Contains("Ethernet", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return !VirtualMarkers.Any(marker =>
+            name.Contains(marker, StringComparison.OrdinalIgnoreCase) ||
+            description.Contains(marker, StringComparison.OrdinalIgnoreCase));
     }
 }

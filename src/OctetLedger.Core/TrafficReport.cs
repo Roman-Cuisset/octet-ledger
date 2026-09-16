@@ -10,7 +10,9 @@ public sealed record TrafficReportRow(
     long BytesSent,
     double AverageBytesPerSecond,
     double PeakBytesPerSecond,
-    double LongestIntervalSeconds = 60)
+    double LongestIntervalSeconds = 60,
+    string InterfaceDescription = "",
+    string InterfaceType = "")
 {
     public long TotalBytes => BytesReceived + BytesSent;
 }
@@ -79,19 +81,27 @@ public static class TrafficReport
         var values = buckets.ToArray();
         if (values.Length == 0) return values;
 
-        var selectedId = selector is not null
-            ? values.FirstOrDefault(bucket =>
+        if (selector is not null)
+        {
+            var selectedId = values.FirstOrDefault(bucket =>
                 string.Equals(bucket.InterfaceId, selector, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(bucket.InterfaceName, selector, StringComparison.OrdinalIgnoreCase))?.InterfaceId
-            : values.Any(bucket => string.Equals(bucket.InterfaceId, preferredInterfaceId, StringComparison.OrdinalIgnoreCase))
-                ? preferredInterfaceId
-                : values.GroupBy(bucket => bucket.InterfaceId)
-                    .OrderByDescending(group => group.Sum(bucket => bucket.BytesReceived + bucket.BytesSent))
-                    .First().Key;
+                string.Equals(bucket.InterfaceName, selector, StringComparison.OrdinalIgnoreCase))?.InterfaceId;
+            return selectedId is null
+                ? []
+                : values.Where(bucket => string.Equals(bucket.InterfaceId, selectedId, StringComparison.OrdinalIgnoreCase)).ToArray();
+        }
 
-        return selectedId is null
-            ? []
-            : values.Where(bucket => string.Equals(bucket.InterfaceId, selectedId, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (values.Any(bucket => string.Equals(bucket.InterfaceId, preferredInterfaceId, StringComparison.OrdinalIgnoreCase)))
+            return values.Where(bucket => string.Equals(bucket.InterfaceId, preferredInterfaceId, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+        var physical = values.Where(bucket => NetworkInterfaceSelector.IsLikelyPhysical(
+            bucket.InterfaceName, bucket.InterfaceDescription, bucket.InterfaceType)).ToArray();
+        if (physical.Length > 0) return physical;
+
+        var fallbackId = values.GroupBy(bucket => bucket.InterfaceId)
+            .OrderByDescending(group => group.Sum(bucket => bucket.BytesReceived + bucket.BytesSent))
+            .First().Key;
+        return values.Where(bucket => string.Equals(bucket.InterfaceId, fallbackId, StringComparison.OrdinalIgnoreCase)).ToArray();
     }
 
     public static IReadOnlyList<TrafficReportRow> SelectInterfaceRows(
@@ -101,16 +111,23 @@ public static class TrafficReport
     {
         var values = rows.ToArray();
         if (values.Length == 0) return values;
-        var selectedId = selector is not null
-            ? values.FirstOrDefault(row =>
+        if (selector is not null)
+        {
+            var selectedId = values.FirstOrDefault(row =>
                 string.Equals(row.InterfaceId, selector, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(row.InterfaceName, selector, StringComparison.OrdinalIgnoreCase))?.InterfaceId
-            : values.Any(row => string.Equals(row.InterfaceId, preferredInterfaceId, StringComparison.OrdinalIgnoreCase))
-                ? preferredInterfaceId
-                : values.OrderByDescending(row => row.TotalBytes).First().InterfaceId;
-        return selectedId is null
-            ? []
-            : values.Where(row => string.Equals(row.InterfaceId, selectedId, StringComparison.OrdinalIgnoreCase)).ToArray();
+                string.Equals(row.InterfaceName, selector, StringComparison.OrdinalIgnoreCase))?.InterfaceId;
+            return selectedId is null
+                ? []
+                : values.Where(row => string.Equals(row.InterfaceId, selectedId, StringComparison.OrdinalIgnoreCase)).ToArray();
+        }
+        if (values.Any(row => string.Equals(row.InterfaceId, preferredInterfaceId, StringComparison.OrdinalIgnoreCase)))
+            return values.Where(row => string.Equals(row.InterfaceId, preferredInterfaceId, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+        var physical = values.Where(row => NetworkInterfaceSelector.IsLikelyPhysical(
+            row.InterfaceName, row.InterfaceDescription, row.InterfaceType)).ToArray();
+        return physical.Length > 0
+            ? physical
+            : [values.OrderByDescending(row => row.TotalBytes).First()];
     }
 
     private static TrafficReportRow[] Build(
@@ -127,6 +144,7 @@ public static class TrafficReport
                 var seconds = Math.Max(1, secondsSelector(group));
                 var peak = group.Max(bucket => bucket.PeakBytesPerSecond ??
                     (bucket.BytesReceived + bucket.BytesSent) / Math.Max(1, bucket.IntervalSeconds));
+                var first = group.First();
                 return new TrafficReportRow(
                     group.Key.Item1,
                     group.Key.InterfaceId,
@@ -135,7 +153,9 @@ public static class TrafficReport
                     sent,
                     (received + sent) / seconds,
                     peak,
-                    group.Max(bucket => bucket.LongestIntervalSeconds ?? bucket.IntervalSeconds));
+                    group.Max(bucket => bucket.LongestIntervalSeconds ?? bucket.IntervalSeconds),
+                    first.InterfaceDescription,
+                    first.InterfaceType);
             })
             .OrderByDescending(row => row.Period, StringComparer.Ordinal)
             .ThenBy(row => row.InterfaceName, StringComparer.OrdinalIgnoreCase)

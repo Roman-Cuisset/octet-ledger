@@ -87,6 +87,25 @@ public class TrafficReportTests
         Assert.All(selected, bucket => Assert.Equal("old-wifi", bucket.InterfaceId));
     }
 
+    [Fact]
+    public void AutomaticSelectionKeepsPhysicalInterfaceChangesAndExcludesVirtualTraffic()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var buckets = new[]
+        {
+            new TrafficBucket("wifi", "Wi-Fi", now, 1_000, 500, InterfaceDescription: "Intel Wi-Fi", InterfaceType: "Wireless80211"),
+            new TrafficBucket("ethernet", "Ethernet", now.AddDays(-1), 200, 4_000, InterfaceDescription: "Realtek PCIe", InterfaceType: "Ethernet"),
+            new TrafficBucket("tailscale", "Tailscale", now, 1_000, 4_000, InterfaceDescription: "Tailscale Tunnel", InterfaceType: "53")
+        };
+        var rows = TrafficReport.Total(buckets);
+
+        var selectedBuckets = TrafficReport.SelectInterface(buckets, null, null);
+        var selectedRows = TrafficReport.SelectInterfaceRows(rows, null, null);
+
+        Assert.Equal(["ethernet", "wifi"], selectedBuckets.Select(bucket => bucket.InterfaceId).Distinct().Order().ToArray());
+        Assert.Equal(["ethernet", "wifi"], selectedRows.Select(row => row.InterfaceId).Order().ToArray());
+    }
+
     [Theory]
     [InlineData(2026, 3, 8, 23 * 60 * 60)]
     [InlineData(2026, 11, 1, 25 * 60 * 60)]

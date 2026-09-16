@@ -83,7 +83,8 @@ public sealed class TrafficStore : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT b.interface_id, s.name, b.minute_utc, b.bytes_received, b.bytes_sent,
-                   b.interval_seconds, b.peak_bytes_per_second, b.longest_interval_seconds
+                   b.interval_seconds, b.peak_bytes_per_second, b.longest_interval_seconds,
+                   s.description, s.type
             FROM (
                 SELECT * FROM traffic_minute
                 UNION ALL
@@ -109,7 +110,9 @@ public sealed class TrafficStore : IDisposable
                 reader.GetInt64(4),
                 reader.GetDouble(5),
                 reader.GetDouble(6),
-                reader.GetDouble(7)));
+                reader.GetDouble(7),
+                reader.GetString(8),
+                reader.GetString(9)));
         }
 
         return buckets;
@@ -126,10 +129,11 @@ public sealed class TrafficStore : IDisposable
             )
             SELECT b.interface_id, s.name,
                    SUM(b.bytes_received), SUM(b.bytes_sent), MIN(b.minute_utc),
-                   MAX(b.peak_bytes_per_second), MAX(b.longest_interval_seconds)
+                   MAX(b.peak_bytes_per_second), MAX(b.longest_interval_seconds),
+                   s.description, s.type
             FROM all_traffic b
             JOIN adapter_state s ON s.interface_id = b.interface_id
-            GROUP BY b.interface_id, s.name
+            GROUP BY b.interface_id, s.name, s.description, s.type
             ORDER BY s.name;
             """;
 
@@ -143,7 +147,8 @@ public sealed class TrafficStore : IDisposable
             var elapsedSeconds = Math.Max(1, (nowUtc - firstMinute).TotalSeconds);
             rows.Add(new TrafficReportRow(
                 "all-time", reader.GetString(0), reader.GetString(1), received, sent,
-                (received + sent) / elapsedSeconds, reader.GetDouble(5), reader.GetDouble(6)));
+                (received + sent) / elapsedSeconds, reader.GetDouble(5), reader.GetDouble(6),
+                reader.GetString(7), reader.GetString(8)));
         }
         return rows;
     }
