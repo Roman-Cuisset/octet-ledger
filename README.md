@@ -60,6 +60,23 @@ For a WinGet portable installation, start background collection once with:
 octetledger collector install
 ```
 
+## How to read the numbers
+
+OctetLedger exposes two different kinds of network data:
+
+| Commands | Source | Lifetime |
+|---|---|---|
+| `octetledger`, `summary`, `interfaces`, `live` | Current counters reported directly by Windows | Usually since each network adapter was initialized; counters can reset after a reboot, driver restart, or adapter disable/enable |
+| `today`, `hourly`, `daily`, `weekly`, `monthly`, `total`, `dashboard` | Counter differences periodically recorded by OctetLedger | Persistent across reboots and adapter resets in `%LOCALAPPDATA%\OctetLedger` |
+
+The Windows counters are the raw source, not historical reports. The first OctetLedger collection
+establishes a baseline; later collections store the differences. Use `interfaces` to inspect what
+Windows sees now, `live` for current transfer rates, and the stored-report commands for usage history.
+
+Stored reports keep physical Wi-Fi and Ethernet rows separate. By default they exclude VPN and
+virtual adapters because those can represent the same traffic a second time; use `--all` when those
+interfaces are intentionally needed.
+
 ## Commands
 
 ```powershell
