@@ -1,5 +1,11 @@
 # Changelog
 
+
+## 0.6.2
+
+- Show the interface name on every dashboard row so Wi-Fi and Ethernet traffic from the same day are distinguishable.
+- Aggregate dashboard charts, daily averages, and peak-day values by calendar day across physical interfaces.
+
 ## 0.6.1
 
 - Keep separate rows for every physical Wi-Fi/Ethernet interface in default stored reports, so switching interfaces cannot hide earlier traffic.
