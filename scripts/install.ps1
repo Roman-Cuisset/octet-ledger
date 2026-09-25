@@ -135,7 +135,25 @@ catch {
     if ($hadExistingInstallation) {
         if ($replacementMade -and (Test-Path -LiteralPath $operationBackup)) {
             try { & $installedExecutable collector stop 2>$null | Out-Null } catch {}
-            [System.IO.File]::Replace($operationBackup, $installedExecutable, $null, $true)
+            Get-CimInstance Win32_Process -Filter "Name='octetledger.exe'" -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.ExecutablePath -eq $installedExecutable -and
+                    $_.CommandLine -match '\smonitor\s' -and
+                    $_.CommandLine -match '--background'
+                } |
+                ForEach-Object {
+                    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+            for ($attempt = 1; $attempt -le 20; $attempt++) {
+                try {
+                    [System.IO.File]::Replace($operationBackup, $installedExecutable, $null, $true)
+                    break
+                }
+                catch {
+                    if ($attempt -eq 20) { throw }
+                    Start-Sleep -Milliseconds 250
+                }
+            }
         }
         try { & $installedExecutable collector start 2>$null | Out-Null } catch {}
     }

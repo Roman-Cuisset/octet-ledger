@@ -21,7 +21,28 @@ if ($WaitForProcessId -gt 0) {
     }
 }
 & $installedExecutable collector stop 2>$null | Out-Null
-[System.IO.File]::Replace($previousExecutable, $installedExecutable, $failedExecutable, $true)
+
+# Clean up any collector process holding the executable.
+Get-CimInstance Win32_Process -Filter "Name='octetledger.exe'" -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.ExecutablePath -eq $installedExecutable -and
+        $_.CommandLine -match '\smonitor\s' -and
+        $_.CommandLine -match '--background'
+    } |
+    ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+
+for ($attempt = 1; $attempt -le 20; $attempt++) {
+    try {
+        [System.IO.File]::Replace($previousExecutable, $installedExecutable, $failedExecutable, $true)
+        break
+    }
+    catch {
+        if ($attempt -eq 20) { throw }
+        Start-Sleep -Milliseconds 250
+    }
+}
 $version = & $installedExecutable version 2>&1
 if ($LASTEXITCODE -ne 0 -or ($version -join "`n") -notmatch '^OctetLedger\s+') {
     [System.IO.File]::Replace($failedExecutable, $installedExecutable, $null, $true)

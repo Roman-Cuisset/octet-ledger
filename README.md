@@ -258,6 +258,7 @@ by the user or the person installing or operating it.
 OctetLedger normally stores interface identifiers, interface names, byte counters, and timestamps.
 It does not record visited sites, IP addresses, or packet contents. Per-application process names
 and byte totals are stored only when the user explicitly runs the elevated `apps monitor` command.
+See the full [Privacy Policy](PRIVACY.md).
 
 ## License
 
