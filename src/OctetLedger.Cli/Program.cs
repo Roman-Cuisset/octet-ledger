@@ -542,8 +542,15 @@ static int ShowStatus()
     if (storedInterfaces.Count == 0)
         Console.WriteLine("  No recorded traffic yet. The first collection establishes a baseline.");
     else
-        foreach (var row in storedInterfaces)
+    {
+        const long significantThreshold = 1_048_576; // 1 MiB
+        var significant = storedInterfaces.Where(row => row.TotalBytes >= significantThreshold).ToArray();
+        var hidden = storedInterfaces.Count - significant.Length;
+        foreach (var row in significant)
             Console.WriteLine($"  {Trim(row.InterfaceName, 24),-24} {ByteFormatter.Format(row.BytesReceived),12} recv  {ByteFormatter.Format(row.BytesSent),12} sent  (since {row.Period})");
+        if (hidden > 0)
+            Console.WriteLine($"  ({hidden} interface(s) with < 1 MiB total hidden; use 'octetledger daily --all' to see all)");
+    }
 
     if (activeWindows.Length > 0 && storedInterfaces.Count > 0)
     {

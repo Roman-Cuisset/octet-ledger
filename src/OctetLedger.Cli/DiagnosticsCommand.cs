@@ -97,8 +97,13 @@ internal static class DiagnosticsCommand
             Console.WriteLine($"INFO  Last collection: {storeStatus.LastCollectionUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "never"}");
             Console.WriteLine($"INFO  Tracked interfaces: {storeStatus.TrackedInterfaces}, stored minutes: {storeStatus.StoredMinutes}");
             var stored = store.ReadTotalReportRows(DateTimeOffset.UtcNow);
-            foreach (var row in stored)
+            const long significantThreshold = 1_048_576; // 1 MiB
+            var significant = stored.Where(row => row.TotalBytes >= significantThreshold).ToArray();
+            var hidden = stored.Count - significant.Length;
+            foreach (var row in significant)
                 Console.WriteLine($"      {row.InterfaceName}: {ByteFormatter.Format(row.BytesReceived)} recv, {ByteFormatter.Format(row.BytesSent)} sent [OctetLedger history]");
+            if (hidden > 0)
+                Console.WriteLine($"      ({hidden} interface(s) with < 1 MiB total hidden)");
             if (stored.Count > 0 && activeInterfaces.Length > 0)
                 Console.WriteLine("INFO  Windows counters and OctetLedger history cover different time windows.");
         }
