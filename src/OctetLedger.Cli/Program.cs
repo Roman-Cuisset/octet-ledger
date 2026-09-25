@@ -58,7 +58,7 @@ static int ShowSummary(string[] arguments)
     { Console.Error.WriteLine("Use either --all or --interface, not both."); return 2; }
     var selected = SelectSnapshots(NetworkInterfaceReader.ReadDistinct(), arguments);
     if (selected is null) return 2;
-    Console.WriteLine("OctetLedger — Windows network traffic statistics\n");
+    Console.WriteLine("OctetLedger — current Windows interface counters\n");
     if (selected.Count == 0)
     {
         Console.Error.WriteLine("No active network interface was found.");
@@ -71,8 +71,8 @@ static int ShowSummary(string[] arguments)
         Console.WriteLine($"  Sent      {ByteFormatter.Format(snapshot.BytesSent),12}");
         Console.WriteLine($"  Total     {ByteFormatter.Format(snapshot.BytesReceived + snapshot.BytesSent),12}");
     }
-    Console.WriteLine("\nCounters are cumulative since Windows started the interface.");
-    Console.WriteLine("Use 'octetledger today' for traffic recorded by OctetLedger today.");
+    Console.WriteLine("\nThese are live Windows counters, not OctetLedger history. They can reset after a reboot,");
+    Console.WriteLine("driver restart, or adapter disable/enable. Use 'octetledger today' for recorded traffic.");
     return 0;
 }
 
@@ -89,6 +89,7 @@ static int ShowInterfaces(string[] arguments)
         Console.WriteLine($"{marker,-7} {snapshot.Status,-10} {Trim(snapshot.Name, 28),-28} {Trim(snapshot.Type, 18),-18} " +
                           $"{ByteFormatter.Format(snapshot.BytesReceived),12} {ByteFormatter.Format(snapshot.BytesSent),12}");
     }
+    Console.WriteLine("\nCurrent Windows counters; values can reset independently of OctetLedger history.");
     return 0;
 }
 
@@ -141,7 +142,7 @@ static async Task<int> ShowLiveAsync(string[] arguments)
         Console.Error.WriteLine(selector is null ? "No active network interface was found." : $"Interface '{selector}' was not found.");
         return 1;
     }
-    Console.WriteLine($"Live traffic on {first.Name}. Press Ctrl+C to stop.");
+    Console.WriteLine($"Live rate on {first.Name} (measured between Windows counter reads). Press Ctrl+C to stop.");
     Console.WriteLine($"{"Time",10} {"Download",16} {"Upload",16} {"Total",16}");
     using var cancellation = CreateCancellation();
     var previous = first;
@@ -352,17 +353,18 @@ static int OutputReport(IReadOnlyList<TrafficReportRow> rows, string[] arguments
         Console.WriteLine($"CSV saved to: {Path.GetFullPath(csvPath)}");
         return 0;
     }
-    PrintReport(rows, scope);
+    PrintReport(rows, scope, HasFlag(arguments, "--all"));
     return 0;
 }
 
-static void PrintReport(IReadOnlyList<TrafficReportRow> rows, string scope)
+static void PrintReport(IReadOnlyList<TrafficReportRow> rows, string scope, bool showAllInterfaces = false)
 {
     var collector = AppDataPaths.IsPortable
         ? new CollectorTaskStatus(false, "Portable/manual collection")
         : CollectorTaskManager.GetStatus();
-    ReportConsoleWriter.Write(rows, scope, collector, Console.Out, Console.Error);
+    ReportConsoleWriter.Write(rows, scope, collector, Console.Out, Console.Error, showAllInterfaces);
 }
+
 
 static int ManageCollector(string[] arguments)
 {
@@ -509,20 +511,46 @@ static int ShowStatus()
         ? new CollectorTaskStatus(false, "Portable/manual collection", "Run 'collect' periodically or keep 'monitor' running with this --data-dir.")
         : CollectorTaskManager.GetStatus();
     var settings = OctetLedgerSettings.Load();
-    var selected = NetworkInterfaceSelector.SelectPrimary(NetworkInterfaceReader.ReadDistinct(), settings.PreferredInterfaceId);
+    var windowsInterfaces = NetworkInterfaceReader.ReadDistinct();
+    var selected = NetworkInterfaceSelector.SelectPrimary(windowsInterfaces, settings.PreferredInterfaceId);
     Console.WriteLine("OctetLedger status");
     Console.WriteLine($"  Database           {status.DatabasePath}");
     Console.WriteLine($"  Database size      {ByteFormatter.Format(status.DatabaseBytes)}");
     Console.WriteLine($"  Tracked interfaces {status.TrackedInterfaces}");
     Console.WriteLine($"  Stored minutes     {status.StoredMinutes}");
     Console.WriteLine($"  Last collection    {status.LastCollectionUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "never"}");
-    Console.WriteLine($"  Default interface  {selected?.Name ?? "none"}");
+    Console.WriteLine($"  Default interface  {selected?.Name ?? "none"}{(settings.PreferredInterfaceId is null ? " (automatic)" : " (saved by user)")}");
     Console.WriteLine($"  Collector          {collector.State}");
     if (collector.Details is not null) Console.WriteLine($"  Collector details  {collector.Details}");
     Console.WriteLine($"  Data mode          {(AppDataPaths.IsPortable ? "portable" : "per-user")}");
     Console.WriteLine($"  Database integrity {(store.CheckIntegrity().IsHealthy ? "healthy" : "FAILED")}");
     Console.WriteLine($"  Raw data retention {settings.RetentionRawDays} days");
     Console.WriteLine($"  Automatic backups  {(settings.AutomaticBackups ? "enabled" : "disabled")}");
+
+    Console.WriteLine();
+    Console.WriteLine("Current Windows interfaces (live counters, not OctetLedger history):");
+    var activeWindows = windowsInterfaces.Where(snapshot => snapshot.Status == "Up" && snapshot.Type is not ("Loopback" or "Tunnel")).ToArray();
+    if (activeWindows.Length == 0)
+        Console.WriteLine("  No active interface found.");
+    else
+        foreach (var iface in activeWindows)
+            Console.WriteLine($"  {Trim(iface.Name, 24),-24} {Trim(iface.Type, 18),-18} {ByteFormatter.Format(iface.BytesReceived),12} recv  {ByteFormatter.Format(iface.BytesSent),12} sent");
+
+    Console.WriteLine();
+    Console.WriteLine("Stored interface history (OctetLedger recorded data):");
+    var storedInterfaces = store.ReadTotalReportRows(DateTimeOffset.UtcNow);
+    if (storedInterfaces.Count == 0)
+        Console.WriteLine("  No recorded traffic yet. The first collection establishes a baseline.");
+    else
+        foreach (var row in storedInterfaces)
+            Console.WriteLine($"  {Trim(row.InterfaceName, 24),-24} {ByteFormatter.Format(row.BytesReceived),12} recv  {ByteFormatter.Format(row.BytesSent),12} sent  (since {row.Period})");
+
+    if (activeWindows.Length > 0 && storedInterfaces.Count > 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine("Windows counters and OctetLedger history cover different time windows and can reset independently.");
+        Console.WriteLine("Use 'octetledger daily --all' to see all stored interfaces or '--interface <name>' to select one.");
+    }
     return 0;
 }
 
@@ -540,28 +568,32 @@ static int ShowHelp(string[] arguments)
         null => """
             OctetLedger — private Windows network usage history
 
-            Start here:
-              octetledger collector install     Collect traffic automatically every minute
-              octetledger today                 Show today's recorded traffic
-              octetledger dashboard             Open the local 30-day dashboard
-              octetledger doctor                Diagnose installation and collection
+            What do you want to do?
 
-            Reports:
-              total, today, hourly, daily, weekly, monthly, top
-              Run 'octetledger help reports' for filters and machine-readable output.
+            See current transfer rate:
+              octetledger live                  Real-time rate from Windows counters
 
-            Management:
-              interfaces, interface, collector, database, budget, compare
-              update, status, version, doctor
+            See past usage (OctetLedger recorded history):
+              octetledger today                 Today's recorded traffic
+              octetledger daily --days 30       Last 30 days
+              octetledger dashboard             Local 30-day web dashboard
 
-            Optional:
-              live                            Real-time interface rate
-              dashboard                       Read-only local web dashboard
-              apps                            Explicit elevated ETW capture by application
-              --data-dir <directory>          Isolated portable data
+            Check that collection works:
+              octetledger status                Data source, collector health, interfaces
+              octetledger doctor                Full installation diagnostics
 
-            Run 'octetledger help <command>' for collector, database, reports, update,
-            budget, dashboard, or apps.
+            First time?
+              octetledger collector install      Start automatic collection every minute
+              The first collection creates a baseline; traffic appears after the next sample.
+
+            More commands:
+              total, hourly, weekly, monthly, top, budget, compare
+              interfaces, interface, collector, database, update, apps
+              Run 'octetledger help <command>' for details.
+
+            Key concept: 'summary', 'interfaces', and 'live' show live Windows counters.
+            'today', 'daily', and 'dashboard' show OctetLedger's persistent recorded history.
+            These are different data sources with different lifetimes.
             """,
         "reports" or "total" or "today" or "hourly" or "daily" or "weekly" or "monthly" or "top" => """
             Usage: octetledger total|today|hourly|daily|weekly|monthly|top [options]
@@ -614,6 +646,33 @@ static int ShowHelp(string[] arguments)
             Monitoring is opt-in and requires an elevated Administrator terminal. It records
             estimated ETW payload bytes by process name only during explicit monitoring windows.
             These estimates may differ from interface counters and are not billing-grade totals.
+            """,
+        "status" => """
+            Usage: octetledger status
+
+            Shows database location, collector health, last collection time, default interface,
+            current Windows interfaces (live counters), and stored OctetLedger interface history.
+            Windows counters and OctetLedger history cover different time windows.
+            """,
+        "interfaces" or "iflist" => """
+            Usage: octetledger interfaces [--all]
+
+            Lists current Windows interface counters. These are live values that can reset after
+            a reboot, driver restart, or adapter disable/enable. They are not OctetLedger history.
+            Use 'octetledger daily' for recorded traffic.
+            """,
+        "live" => """
+            Usage: octetledger live [--interval N] [--interface <name-or-id>]
+
+            Shows real-time transfer rate measured between successive Windows counter reads.
+            This is a live measurement, not stored data. Press Ctrl+C to stop.
+            """,
+        "summary" => """
+            Usage: octetledger [summary] [--all] [--interface <name-or-id>]
+
+            Shows current Windows interface counters for the selected interface(s).
+            These are cumulative values that can reset independently of OctetLedger history.
+            Use 'octetledger today' for recorded traffic.
             """,
         _ => null
     };

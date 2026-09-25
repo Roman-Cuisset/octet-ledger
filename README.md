@@ -80,12 +80,14 @@ interfaces are intentionally needed.
 ## Commands
 
 ```powershell
+# Live Windows counters (can reset after reboot, driver restart, or adapter change)
 octetledger                              # Primary interface counters
 octetledger summary --all                # All active interfaces
-octetledger interfaces                   # List interfaces
+octetledger interfaces                   # List interfaces and counters
 octetledger interface set "Wi-Fi"        # Save the default interface
-octetledger live                         # Real-time rates
+octetledger live                         # Real-time rate between counter reads
 
+# Recorded OctetLedger history (persistent across reboots)
 octetledger total                        # All recorded traffic since the beginning
 octetledger today                        # Today's stored traffic
 octetledger hourly --hours 24
@@ -120,8 +122,8 @@ octetledger apps top --days 30
 octetledger apps monitor --seconds 60   # Administrator terminal required
 
 octetledger version --verbose
-octetledger doctor
-octetledger status
+octetledger doctor                       # Full diagnostics with interface coverage
+octetledger status                       # Windows vs OctetLedger data, collector health
 octetledger update check
 octetledger update install
 octetledger update rollback

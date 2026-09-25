@@ -9,8 +9,16 @@ internal static class ReportConsoleWriter
         string scope,
         CollectorTaskStatus collector,
         TextWriter output,
-        TextWriter error)
+        TextWriter error,
+        bool showAllInterfaces = false)
     {
+        output.WriteLine($"OctetLedger — recorded traffic ({scope})");
+        if (showAllInterfaces)
+            output.WriteLine("Including all interfaces (VPN/virtual adapters may duplicate transport traffic).");
+        var interfaces = rows.Select(row => row.InterfaceName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (interfaces.Length > 1)
+            output.WriteLine($"Interfaces: {string.Join(", ", interfaces)}");
+        output.WriteLine();
         output.WriteLine($"{"Period",16} {"Interface",-24} {"Received",12} {"Sent",12} {"Total",12} {"Average",14} {"Peak avg",14}");
         output.WriteLine(new string('-', 112));
         foreach (var row in rows)

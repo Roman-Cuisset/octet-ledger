@@ -1,6 +1,28 @@
 # Changelog
 
 
+## Unreleased
+
+### Clarity
+
+- Label `summary` and `interfaces` output as live Windows counters that can reset independently of OctetLedger history.
+- Describe `live` as measuring rate between Windows counter reads.
+- Print the data source, scope, and included interfaces at the top of stored reports (`today`, `daily`, etc.).
+- Show interface scope, last collection time, generation time, and partial-day markers in the dashboard.
+- Add an explanatory footer to the dashboard distinguishing per-day chart totals from per-interface table rows.
+
+### Diagnostics
+
+- `status` now shows current Windows interfaces alongside OctetLedger stored interface history, making it clear which adapters have recorded data and how the two data sources differ.
+- `doctor` lists physical interfaces with their Windows counters and OctetLedger history, reports the last collection time, and suggests diagnostic commands when problems are found.
+- Show whether the default interface was selected automatically or saved by user.
+
+### Help and documentation
+
+- Reorganize top-level help around three tasks: see current rate, see past usage, check collection health.
+- Add help topics for `status`, `interfaces`, `live`, and `summary` explaining their data source.
+- Group README commands by data source (Windows counters vs OctetLedger history).
+
 ## 0.6.2
 
 - Show the interface name on every dashboard row so Wi-Fi and Ethernet traffic from the same day are distinguishable.
