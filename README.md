@@ -241,6 +241,18 @@ code-signing certificate and password. Configuration is rejected when only one s
 workflow signs, timestamps over HTTPS, and verifies each executable before packaging, and always
 removes the temporary certificate. Without those secrets, releases remain explicitly unsigned.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
+
+Committers and reviewers: <https://github.com/Roman-Cuisset/octet-ledger>
+
+Approvers: <https://github.com/Roman-Cuisset/octet-ledger/graphs/contributors>
+
+This program will not transfer information to other networked systems unless specifically requested
+by the user or the person installing or operating it.
+
 ## Privacy
 
 OctetLedger normally stores interface identifiers, interface names, byte counters, and timestamps.
