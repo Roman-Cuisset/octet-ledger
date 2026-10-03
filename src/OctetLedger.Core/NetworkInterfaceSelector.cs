@@ -24,12 +24,7 @@ public static class NetworkInterfaceSelector
         IEnumerable<NetworkInterfaceSnapshot> snapshots,
         string? preferredInterfaceId = null)
     {
-        var active = snapshots
-            .Where(snapshot =>
-                snapshot.Status == "Up" &&
-                IsLikelyPhysical(snapshot.Name, snapshot.Description, snapshot.Type) &&
-                snapshot.BytesReceived + snapshot.BytesSent > 0)
-            .ToArray();
+        var active = snapshots.Where(snapshot => snapshot.Status == "Up").ToArray();
 
         if (!string.IsNullOrWhiteSpace(preferredInterfaceId))
         {
@@ -42,6 +37,7 @@ public static class NetworkInterfaceSelector
         }
 
         return active
+            .Where(snapshot => IsLikelyPhysical(snapshot.Name, snapshot.Description, snapshot.Type))
             .OrderByDescending(snapshot => snapshot.BytesReceived + snapshot.BytesSent)
             .FirstOrDefault();
     }

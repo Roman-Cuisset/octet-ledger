@@ -29,6 +29,20 @@ public class TrafficRateCalculatorTests
         Assert.Equal(0, rate.SentBytesPerSecond);
     }
 
+    [Theory]
+    [InlineData(100, 8_000)]
+    [InlineData(7_000, 100)]
+    public void CalculateRebaselinesBothDirectionsWhenEitherCounterResets(long received, long sent)
+    {
+        var previous = Snapshot(received: 5_000, sent: 6_000, second: 0);
+        var current = Snapshot(received, sent, second: 1);
+
+        var rate = TrafficRateCalculator.Calculate(previous, current);
+
+        Assert.Equal(0, rate.ReceivedBytesPerSecond);
+        Assert.Equal(0, rate.SentBytesPerSecond);
+    }
+
     private static NetworkInterfaceSnapshot Snapshot(long received, long sent, int second)
     {
         return new NetworkInterfaceSnapshot(

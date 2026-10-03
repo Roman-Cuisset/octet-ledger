@@ -11,12 +11,22 @@ internal static class ApplicationTrafficCommand
     public static async Task<int> RunAsync(string[] arguments)
     {
         var action = arguments.FirstOrDefault()?.ToLowerInvariant() ?? "top";
-        return action switch
+        try
         {
-            "top" => ShowTop(arguments.Skip(1).ToArray()),
-            "monitor" => await MonitorAsync(arguments.Skip(1).ToArray()),
-            _ => Usage()
-        };
+            return action switch
+            {
+                "top" => ShowTop(arguments.Skip(1).ToArray()),
+                "monitor" => await MonitorAsync(arguments.Skip(1).ToArray()),
+                _ => Usage()
+            };
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                                          InvalidOperationException or System.ComponentModel.Win32Exception or
+                                          Microsoft.Data.Sqlite.SqliteException)
+        {
+            Console.Error.WriteLine($"Application traffic failed: {exception.Message}");
+            return 1;
+        }
     }
 
     private static int ShowTop(string[] arguments)
@@ -62,6 +72,7 @@ internal static class ApplicationTrafficCommand
                 }
                 catch (ArgumentException) { return "unknown-process"; }
                 catch (InvalidOperationException) { return "unknown-process"; }
+                catch (System.ComponentModel.Win32Exception) { return "unknown-process"; }
             });
             totals.AddOrUpdate(name,
                 _ => received ? new Counters(size, 0) : new Counters(0, size),
@@ -73,6 +84,10 @@ internal static class ApplicationTrafficCommand
         session.Source.Kernel.TcpIpSend += data => Add(data.ProcessID, data.size, false);
         session.Source.Kernel.UdpIpRecv += data => Add(data.ProcessID, data.size, true);
         session.Source.Kernel.UdpIpSend += data => Add(data.ProcessID, data.size, false);
+        session.Source.Kernel.TcpIpRecvIPV6 += data => Add(data.ProcessID, data.size, true);
+        session.Source.Kernel.TcpIpSendIPV6 += data => Add(data.ProcessID, data.size, false);
+        session.Source.Kernel.UdpIpRecvIPV6 += data => Add(data.ProcessID, data.size, true);
+        session.Source.Kernel.UdpIpSendIPV6 += data => Add(data.ProcessID, data.size, false);
         session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP | KernelTraceEventParser.Keywords.Process);
         Console.WriteLine($"Capturing estimated per-application payload bytes for up to {seconds} seconds. Press Ctrl+C to stop.");
         Console.WriteLine("Only this explicit monitoring window is recorded; totals may differ from interface counters.");
@@ -86,7 +101,9 @@ internal static class ApplicationTrafficCommand
         Console.CancelKeyPress += cancel;
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(seconds.Value), cancellation.Token);
+            var delay = Task.Delay(TimeSpan.FromSeconds(seconds.Value), cancellation.Token);
+            var completed = await Task.WhenAny(delay, processing);
+            await completed;
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         finally

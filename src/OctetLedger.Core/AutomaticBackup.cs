@@ -9,11 +9,11 @@ public static class AutomaticBackup
         var settings = OctetLedgerSettings.Load();
         if (!settings.AutomaticBackups || settings.LastAutomaticBackupUtc is { } last && nowUtc - last < TimeSpan.FromHours(24)) return null;
         Directory.CreateDirectory(BackupDirectory);
-        var path = Path.Combine(BackupDirectory, $"octetledger-{nowUtc:yyyyMMdd-HHmmss}.db");
+        var path = Path.Combine(BackupDirectory, $"octetledger-{nowUtc.UtcDateTime.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture)}.db");
         using (var store = new TrafficStore()) store.Backup(path);
         foreach (var obsolete in Directory.GetFiles(BackupDirectory, "octetledger-*.db").OrderByDescending(File.GetCreationTimeUtc).Skip(7))
             File.Delete(obsolete);
-        (settings with { LastAutomaticBackupUtc = nowUtc }).Save();
+        OctetLedgerSettings.Update(current => current with { LastAutomaticBackupUtc = nowUtc });
         return path;
     }
 }

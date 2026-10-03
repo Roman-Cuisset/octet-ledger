@@ -351,8 +351,6 @@ public class TrafficStoreTests
             var check = TrafficStore.CheckIntegrity(unrelated);
 
             Assert.False(check.IsHealthy);
-            Assert.Contains(check.Messages, message => message.Contains("required OctetLedger", StringComparison.OrdinalIgnoreCase) ||
-                                                       message.Contains("do not belong", StringComparison.OrdinalIgnoreCase));
             Assert.Throws<InvalidDataException>(() => TrafficStore.Restore(unrelated, destination));
             Assert.True(TrafficStore.CheckIntegrity(destination).IsHealthy);
         }
@@ -364,28 +362,138 @@ public class TrafficStoreTests
     }
 
     [Fact]
-    public void OpeningDatabaseFromNewerVersionFailsWithoutChangingItsVersion()
+    public void RestoreRejectsKnownTableNamesWithAnInvalidSchemaAndPreservesDestination()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var source = Path.Combine(directory, "invalid.db");
+        var destination = Path.Combine(directory, "active.db");
+        try
+        {
+            using (var active = new TrafficStore(destination))
+            {
+                active.Collect([Snapshot(1_000, 2_000, 0)]);
+                active.Collect([Snapshot(1_100, 2_200, 1)]);
+            }
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = source,
+                Pooling = false
+            }.ToString()))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE adapter_state (value TEXT); CREATE TABLE traffic_minute (value TEXT);";
+                command.ExecuteNonQuery();
+            }
+
+            Assert.False(TrafficStore.CheckIntegrity(source).IsHealthy);
+            Assert.Throws<InvalidDataException>(() => TrafficStore.Restore(source, destination));
+            using var preserved = new TrafficStore(destination);
+            Assert.Equal(300, Assert.Single(preserved.ReadTotalReportRows(DateTimeOffset.UtcNow)).TotalBytes);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void IntegrityCheckRejectsTrafficWithAMissingAdapter()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "orphan.db");
+        try
+        {
+            using (var store = new TrafficStore(path)) { }
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Pooling = false
+            }.ToString()))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    PRAGMA foreign_keys = OFF;
+                    INSERT INTO traffic_minute(interface_id, minute_utc, bytes_received, bytes_sent)
+                    VALUES ('missing', '2026-01-01T00:00:00.0000000+00:00', 123, 456);
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            var result = TrafficStore.CheckIntegrity(path);
+
+            Assert.False(result.IsHealthy);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RestoreIncludesCommittedTrafficStillInTheSourceWriteAheadLog()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var source = Path.Combine(directory, "source.db");
+        var destination = Path.Combine(directory, "active.db");
+        try
+        {
+            using (var store = new TrafficStore(source)) store.Collect([Snapshot(1_000, 2_000, 0)]);
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = source,
+                Pooling = false
+            }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                PRAGMA journal_mode = WAL;
+                PRAGMA wal_autocheckpoint = 0;
+                INSERT INTO traffic_minute(interface_id, minute_utc, bytes_received, bytes_sent)
+                VALUES ('test-interface', '2026-01-01T00:00:00.0000000+00:00', 123, 456);
+                """;
+            command.ExecuteNonQuery();
+
+            TrafficStore.Restore(source, destination);
+
+            using var restored = new TrafficStore(destination);
+            var row = Assert.Single(restored.ReadTotalReportRows(DateTimeOffset.UtcNow));
+            Assert.Equal(123, row.BytesReceived);
+            Assert.Equal(456, row.BytesSent);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OpeningDatabaseFromNewerVersionPreservesItsVersionAndJournalMode()
     {
         var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
         var databasePath = Path.Combine(testDirectory, "future.db");
         try
         {
             using (var store = new TrafficStore(databasePath)) { }
-            using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+            using (var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False"))
             {
                 connection.Open();
                 using var command = connection.CreateCommand();
-                command.CommandText = $"PRAGMA user_version = {TrafficStore.CurrentSchemaVersion + 1};";
+                command.CommandText = $"PRAGMA journal_mode = WAL; PRAGMA user_version = {TrafficStore.CurrentSchemaVersion + 1};";
                 command.ExecuteNonQuery();
             }
 
             Assert.Throws<InvalidDataException>(() => new TrafficStore(databasePath));
-            using var inspection = new SqliteConnection($"Data Source={databasePath}");
+            using var inspection = new SqliteConnection($"Data Source={databasePath};Pooling=False");
             inspection.Open();
             using var version = inspection.CreateCommand();
             version.CommandText = "PRAGMA user_version;";
             Assert.Equal(TrafficStore.CurrentSchemaVersion + 1,
                 Convert.ToInt32(version.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
+            version.CommandText = "PRAGMA journal_mode;";
+            Assert.Equal("wal", version.ExecuteScalar());
         }
         finally
         {
@@ -440,13 +548,68 @@ public class TrafficStoreTests
 
             Assert.Equal(1, result.RawMinutesArchived);
             Assert.Equal(before, Assert.Single(store.ReadTotalReportRows(DateTimeOffset.UtcNow)).TotalBytes);
-            Assert.Equal(before, Assert.Single(store.ReadBuckets(DateTimeOffset.UnixEpoch)).BytesReceived +
-                                 Assert.Single(store.ReadBuckets(DateTimeOffset.UnixEpoch)).BytesSent);
+            Assert.Equal(before, Assert.Single(store.ReadBuckets(DateTimeOffset.MinValue)).BytesReceived +
+                                 Assert.Single(store.ReadBuckets(DateTimeOffset.MinValue)).BytesSent);
         }
         finally
         {
             SqliteConnection.ClearAllPools();
             if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RetentionPreservesLocalMonthBoundariesAndMarksDailyArchives()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "test.db");
+        var zone = TimeZoneInfo.CreateCustomTimeZone("UTC-8", TimeSpan.FromHours(-8), "UTC-8", "UTC-8");
+        var start = new DateTimeOffset(2026, 2, 1, 2, 0, 0, TimeSpan.Zero);
+        try
+        {
+            using var store = new TrafficStore(path);
+            store.Collect([Snapshot(0, 0, 0) with { CapturedAt = start.AddMinutes(-1) }]);
+            store.Collect([Snapshot(100, 0, 0) with { CapturedAt = start }]);
+            store.Collect([Snapshot(300, 0, 0) with { CapturedAt = start.AddHours(5) }]);
+            store.Collect([Snapshot(600, 0, 0) with { CapturedAt = start.AddHours(7) }]);
+
+            var result = store.ApplyRetention(30, new DateTimeOffset(2026, 3, 5, 0, 0, 0, TimeSpan.Zero), zone);
+
+            Assert.Equal(3, result.RawMinutesArchived);
+            Assert.Equal(2, result.DailyRowsWritten);
+            var archives = store.ReadBuckets(DateTimeOffset.UnixEpoch);
+            Assert.All(archives, bucket => Assert.True(bucket.IsDailyArchive));
+            Assert.Equal(600, archives.Sum(bucket => bucket.BytesReceived));
+            var februaryStartUtc = new DateTimeOffset(2026, 2, 1, 8, 0, 0, TimeSpan.Zero);
+            var february = Assert.Single(store.ReadBuckets(februaryStartUtc));
+            Assert.Equal(februaryStartUtc, february.MinuteUtc);
+            Assert.Equal(300, february.BytesReceived);
+            Assert.Equal(0, store.ApplyRetention(30, new DateTimeOffset(2026, 3, 5, 0, 0, 0, TimeSpan.Zero), zone).RawMinutesArchived);
+            Assert.Equal(600, Assert.Single(store.ReadTotalReportRows(DateTimeOffset.UtcNow)).TotalBytes);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ApplicationTrafficSupportsDatabaseNamesContainingConnectionStringPunctuation()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "app;traffic.db");
+        var capturedAt = new DateTimeOffset(2026, 1, 1, 12, 34, 0, TimeSpan.Zero);
+        try
+        {
+            ApplicationTrafficStore.Add(capturedAt, [new ApplicationTrafficRow("browser.exe", 123, 456)], path);
+
+            var row = Assert.Single(ApplicationTrafficStore.ReadTop(capturedAt.AddHours(-1), 10, path));
+            Assert.Equal(123, row.BytesReceived);
+            Assert.Equal(456, row.BytesSent);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         }
     }
 

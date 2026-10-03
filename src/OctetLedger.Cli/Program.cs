@@ -9,44 +9,65 @@ var effectiveArgs = args.ToList();
 var dataDirectoryIndex = effectiveArgs.FindIndex(value => string.Equals(value, "--data-dir", StringComparison.OrdinalIgnoreCase));
 if (dataDirectoryIndex >= 0)
 {
-    if (dataDirectoryIndex + 1 >= effectiveArgs.Count)
+    if (dataDirectoryIndex + 1 >= effectiveArgs.Count ||
+        string.IsNullOrWhiteSpace(effectiveArgs[dataDirectoryIndex + 1]) ||
+        effectiveArgs[dataDirectoryIndex + 1].StartsWith('-') ||
+        effectiveArgs.Count(value => string.Equals(value, "--data-dir", StringComparison.OrdinalIgnoreCase)) != 1)
     {
         Console.Error.WriteLine("--data-dir requires a directory path.");
         return 2;
     }
-    AppDataPaths.ConfigureDataDirectory(effectiveArgs[dataDirectoryIndex + 1]);
+    try
+    {
+        AppDataPaths.ConfigureDataDirectory(effectiveArgs[dataDirectoryIndex + 1]);
+    }
+    catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+    {
+        Console.Error.WriteLine($"Invalid --data-dir: {exception.Message}");
+        return 2;
+    }
     effectiveArgs.RemoveRange(dataDirectoryIndex, 2);
 }
 var command = effectiveArgs.FirstOrDefault()?.ToLowerInvariant() ?? "summary";
 var rest = effectiveArgs.Skip(1).ToArray();
-var exitCode = command switch
+int exitCode;
+try
 {
-    "summary" => ShowSummary(rest),
-    "interfaces" or "iflist" => ShowInterfaces(rest),
-    "interface" => ManageInterface(rest),
-    "live" => await ShowLiveAsync(rest),
-    "collect" => rest.Length == 0 ? CollectOnce() : UnexpectedArguments("collect"),
-    "monitor" => await MonitorAsync(rest),
-    "today" => ShowReport(ReportKind.Today, rest),
-    "total" => ShowReport(ReportKind.Total, rest),
-    "hourly" => ShowReport(ReportKind.Hourly, rest),
-    "daily" => ShowReport(ReportKind.Daily, rest),
-    "weekly" => ShowReport(ReportKind.Weekly, rest),
-    "monthly" => ShowReport(ReportKind.Monthly, rest),
-    "top" => ShowReport(ReportKind.Top, rest),
-    "collector" => ManageCollector(rest),
-    "database" or "db" => ManageDatabase(rest),
-    "update" => await UpdateCommand.RunAsync(rest, GetCurrentVersion()),
-    "budget" => BudgetCommand.Run(rest),
-    "compare" => ComparisonCommand.Run(rest),
-    "dashboard" => await DashboardCommand.RunAsync(rest),
-    "apps" => await ApplicationTrafficCommand.RunAsync(rest),
-    "status" => rest.Length == 0 ? ShowStatus() : UnexpectedArguments("status"),
-    "doctor" => DiagnosticsCommand.RunDoctor(GetCurrentVersion(), rest),
-    "help" or "--help" or "-h" => ShowHelp(rest),
-    "version" or "--version" => DiagnosticsCommand.ShowVersion(GetCurrentVersion(), rest),
-    _ => UnknownCommand(command)
-};
+    exitCode = command switch
+    {
+        "summary" => ShowSummary(rest),
+        "interfaces" or "iflist" => ShowInterfaces(rest),
+        "interface" => ManageInterface(rest),
+        "live" => await ShowLiveAsync(rest),
+        "collect" => rest.Length == 0 ? CollectOnce() : UnexpectedArguments("collect"),
+        "monitor" => await MonitorAsync(rest),
+        "today" => ShowReport(ReportKind.Today, rest),
+        "total" => ShowReport(ReportKind.Total, rest),
+        "hourly" => ShowReport(ReportKind.Hourly, rest),
+        "daily" => ShowReport(ReportKind.Daily, rest),
+        "weekly" => ShowReport(ReportKind.Weekly, rest),
+        "monthly" => ShowReport(ReportKind.Monthly, rest),
+        "top" => ShowReport(ReportKind.Top, rest),
+        "collector" => ManageCollector(rest),
+        "database" or "db" => ManageDatabase(rest),
+        "update" => await UpdateCommand.RunAsync(rest, GetCurrentVersion()),
+        "budget" => BudgetCommand.Run(rest),
+        "compare" => ComparisonCommand.Run(rest),
+        "dashboard" => await DashboardCommand.RunAsync(rest),
+        "apps" => await ApplicationTrafficCommand.RunAsync(rest),
+        "status" => rest.Length == 0 ? ShowStatus() : UnexpectedArguments("status"),
+        "doctor" => DiagnosticsCommand.RunDoctor(GetCurrentVersion(), rest),
+        "help" or "--help" or "-h" => ShowHelp(rest),
+        "version" or "--version" => DiagnosticsCommand.ShowVersion(GetCurrentVersion(), rest),
+        _ => UnknownCommand(command)
+    };
+}
+catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or
+                                Microsoft.Data.Sqlite.SqliteException or System.ComponentModel.Win32Exception or TimeoutException)
+{
+    Console.Error.WriteLine($"OctetLedger: {exception.Message}");
+    return 1;
+}
 if (exitCode == 0 && command is "summary" or "status")
     await UpdateCommand.MaybeNotifyAsync(GetCurrentVersion());
 return exitCode;
@@ -112,12 +133,12 @@ static int ManageInterface(string[] arguments)
             if (string.IsNullOrWhiteSpace(selector)) { Console.Error.WriteLine("Usage: octetledger interface set <name-or-id>"); return 2; }
             var match = NetworkInterfaceSelector.Resolve(snapshots, selector);
             if (match is null) { Console.Error.WriteLine($"Interface '{selector}' was not found."); return 1; }
-            (settings with { PreferredInterfaceId = match.Id }).Save();
+            OctetLedgerSettings.Update(current => current with { PreferredInterfaceId = match.Id });
             Console.WriteLine($"Default interface set to: {match.Name}");
             return 0;
         case "clear":
             if (arguments.Length > 1) { Console.Error.WriteLine("Usage: octetledger interface clear"); return 2; }
-            (settings with { PreferredInterfaceId = null }).Save();
+            OctetLedgerSettings.Update(current => current with { PreferredInterfaceId = null });
             Console.WriteLine("Default interface selection is now automatic.");
             return 0;
         default:
@@ -130,7 +151,7 @@ static async Task<int> ShowLiveAsync(string[] arguments)
 {
     if (!ValidateOptions(arguments, [], ["--interval", "--interface", "-i"])) return 2;
     var intervalText = ReadOption(arguments, "--interval") ?? "1";
-    if (!double.TryParse(intervalText, CultureInfo.InvariantCulture, out var interval) || interval is < 0.2 or > 60)
+    if (!double.TryParse(intervalText, CultureInfo.InvariantCulture, out var interval) || !double.IsFinite(interval) || interval is < 0.2 or > 60)
     { Console.Error.WriteLine("--interval must be between 0.2 and 60 seconds."); return 2; }
     var snapshots = NetworkInterfaceReader.ReadDistinct();
     var selector = ReadOption(arguments, "--interface") ?? ReadOption(arguments, "-i");
@@ -178,16 +199,17 @@ static async Task<int> MonitorAsync(string[] arguments)
 {
     if (!ValidateOptions(arguments, ["--quiet", "--background"], ["--interval"])) return 2;
     var intervalText = ReadOption(arguments, "--interval") ?? OctetLedgerDefaults.CollectionIntervalSeconds.ToString(CultureInfo.InvariantCulture);
-    if (!double.TryParse(intervalText, CultureInfo.InvariantCulture, out var interval) || interval is < 1 or > 3600)
+    if (!double.TryParse(intervalText, CultureInfo.InvariantCulture, out var interval) || !double.IsFinite(interval) || interval is < 1 or > 3600)
     { Console.Error.WriteLine("--interval must be between 1 and 3600 seconds."); return 2; }
     var quiet = HasFlag(arguments, "--quiet");
     var background = HasFlag(arguments, "--background");
+    if (background && CollectorTaskManager.StopRequested) return 0;
     var backgroundClaimed = false;
     if (background)
     {
         try
         {
-            if (!CollectorTaskManager.TryClaimBackgroundProcess()) return 0;
+            if (!CollectorTaskManager.TryClaimBackgroundProcess()) return 3; // Another collector already owns this data directory.
             backgroundClaimed = true;
         }
         catch (Exception exception)
@@ -204,6 +226,7 @@ static async Task<int> MonitorAsync(string[] arguments)
         {
             while (!cancellation.IsCancellationRequested)
             {
+                if (background && CollectorTaskManager.StopRequested) return 0;
                 try
                 {
                     using var store = new TrafficStore();
@@ -291,6 +314,7 @@ static int ShowReport(ReportKind kind, string[] arguments)
     }
     if (count is null) return 2;
     using var store = new TrafficStore();
+    var preferred = OctetLedgerSettings.Load().PreferredInterfaceId;
     if (kind == ReportKind.Total)
     {
         IReadOnlyList<TrafficReportRow> totalRows = store.ReadTotalReportRows(DateTimeOffset.UtcNow);
@@ -302,9 +326,11 @@ static int ShowReport(ReportKind kind, string[] arguments)
         else
         {
             var selector = ReadOption(arguments, "--interface") ?? ReadOption(arguments, "-i");
-            totalRows = TrafficReport.SelectInterfaceRows(totalRows, selector, OctetLedgerSettings.Load().PreferredInterfaceId);
+            totalRows = TrafficReport.SelectInterfaceRows(totalRows, selector, preferred);
             totalScope = selector is not null
                 ? $"interface '{selector}' across all recorded history"
+                : totalRows.Any(row => string.Equals(row.InterfaceId, preferred, StringComparison.OrdinalIgnoreCase))
+                    ? $"saved preference '{totalRows[0].InterfaceName}' across all recorded history"
                 : totalRows.Select(row => row.InterfaceId).Distinct(StringComparer.OrdinalIgnoreCase).Take(2).Count() > 1
                     ? "physical interfaces across all recorded history"
                     : totalRows.Count > 0 ? $"historical interface '{totalRows[0].InterfaceName}' across all recorded history" : "all recorded history";
@@ -323,9 +349,11 @@ static int ShowReport(ReportKind kind, string[] arguments)
     else
     {
         var selector = ReadOption(arguments, "--interface") ?? ReadOption(arguments, "-i");
-        buckets = TrafficReport.SelectInterface(allBuckets, selector, OctetLedgerSettings.Load().PreferredInterfaceId);
+        buckets = TrafficReport.SelectInterface(allBuckets, selector, preferred);
         scope = selector is not null
             ? $"interface '{selector}' in the requested period"
+            : buckets.Any(bucket => string.Equals(bucket.InterfaceId, preferred, StringComparison.OrdinalIgnoreCase))
+                ? $"saved preference '{buckets[0].InterfaceName}' in the requested period"
             : buckets.Select(bucket => bucket.InterfaceId).Distinct(StringComparer.OrdinalIgnoreCase).Take(2).Count() > 1
                 ? "physical interfaces in the requested period"
                 : buckets.Count > 0 ? $"historical interface '{buckets[0].InterfaceName}' in the requested period" : "the requested period";
@@ -379,6 +407,9 @@ static int ManageCollector(string[] arguments)
     {
         switch (action)
         {
+            case "ensure":
+                CollectorTaskManager.EnsureRunning();
+                return 0;
             case "install":
                 var executable = Environment.ProcessPath;
                 if (string.IsNullOrEmpty(executable) || !string.Equals(Path.GetFileName(executable), "octetledger.exe", StringComparison.OrdinalIgnoreCase))
@@ -474,7 +505,7 @@ static int ManageDatabaseCore(string[] arguments)
                 { Console.Error.WriteLine("Retention days must be between 1 and 3660."); return 2; }
                 using var store = new TrafficStore();
                 var retention = store.ApplyRetention(days, DateTimeOffset.UtcNow);
-                (settings with { RetentionRawDays = days }).Save();
+                OctetLedgerSettings.Update(current => current with { RetentionRawDays = days });
                 Console.WriteLine($"Archived {retention.RawMinutesArchived} raw minute rows into {retention.DailyRowsWritten} daily rows; retaining {days} raw days.");
                 return 0;
             }
@@ -491,7 +522,7 @@ static int ManageDatabaseCore(string[] arguments)
                 }
                 if (setting is not ("enable" or "disable"))
                 { Console.Error.WriteLine("Usage: octetledger database auto-backup [status|enable|disable]"); return 2; }
-                (settings with { AutomaticBackups = setting == "enable" }).Save();
+                OctetLedgerSettings.Update(current => current with { AutomaticBackups = setting == "enable" });
                 Console.WriteLine($"Automatic daily backups {(setting == "enable" ? "enabled" : "disabled")}.");
                 return 0;
             }
@@ -519,7 +550,8 @@ static int ShowStatus()
     Console.WriteLine($"  Tracked interfaces {status.TrackedInterfaces}");
     Console.WriteLine($"  Stored minutes     {status.StoredMinutes}");
     Console.WriteLine($"  Last collection    {status.LastCollectionUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "never"}");
-    Console.WriteLine($"  Default interface  {selected?.Name ?? "none"}{(settings.PreferredInterfaceId is null ? " (automatic)" : " (saved by user)")}");
+    Console.WriteLine($"  Default interface  {selected?.Name ?? "none"}");
+    Console.WriteLine($"  Saved preference   {settings.PreferredInterfaceId ?? "none (automatic)"}");
     Console.WriteLine($"  Collector          {collector.State}");
     if (collector.Details is not null) Console.WriteLine($"  Collector details  {collector.Details}");
     Console.WriteLine($"  Data mode          {(AppDataPaths.IsPortable ? "portable" : "per-user")}");
@@ -544,10 +576,11 @@ static int ShowStatus()
     else
     {
         const long significantThreshold = 1_048_576; // 1 MiB
-        var significant = storedInterfaces.Where(row => row.TotalBytes >= significantThreshold).ToArray();
+        var significant = storedInterfaces.Where(row => row.TotalBytes >= significantThreshold ||
+            NetworkInterfaceSelector.IsLikelyPhysical(row.InterfaceName, row.InterfaceDescription, row.InterfaceType)).ToArray();
         var hidden = storedInterfaces.Count - significant.Length;
         foreach (var row in significant)
-            Console.WriteLine($"  {Trim(row.InterfaceName, 24),-24} {ByteFormatter.Format(row.BytesReceived),12} recv  {ByteFormatter.Format(row.BytesSent),12} sent  (since {row.Period})");
+            Console.WriteLine($"  {Trim(row.InterfaceName, 24),-24} {ByteFormatter.Format(row.BytesReceived),12} recv  {ByteFormatter.Format(row.BytesSent),12} sent  (all recorded history)");
         if (hidden > 0)
             Console.WriteLine($"  ({hidden} interface(s) with < 1 MiB total hidden; use 'octetledger daily --all' to see all)");
     }

@@ -56,11 +56,26 @@ public static class ApplicationTrafficStore
     private static SqliteConnection Open(string? databasePath)
     {
         var path = databasePath ?? AppDataPaths.DatabasePath;
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var connection = new SqliteConnection($"Data Source={path};Pooling=False");
-        connection.Open();
-        TrafficDatabaseSchema.Initialize(connection);
-        return connection;
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Private,
+            Pooling = false
+        }.ToString());
+        try
+        {
+            connection.Open();
+            TrafficDatabaseSchema.Initialize(connection);
+            return connection;
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
     }
 
 }

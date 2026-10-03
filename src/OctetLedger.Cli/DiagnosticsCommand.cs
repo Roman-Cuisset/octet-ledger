@@ -66,9 +66,11 @@ internal static class DiagnosticsCommand
             Check("Data directory", false, exception.Message, ref failures);
         }
 
+        var databaseHealthy = false;
         if (File.Exists(AppDataPaths.DatabasePath))
         {
             var integrity = TrafficStore.CheckIntegrity(AppDataPaths.DatabasePath);
+            databaseHealthy = integrity.IsHealthy;
             Check("Database", integrity.IsHealthy, integrity.IsHealthy ? "integrity OK" : string.Join("; ", integrity.Messages), ref failures);
         }
         else
@@ -87,10 +89,13 @@ internal static class DiagnosticsCommand
         else
         {
             var collector = CollectorTaskManager.GetStatus();
-            Check("Collector", collector.Installed, collector.Details is null ? collector.State : $"{collector.State}: {collector.Details}", ref failures);
+            var collecting = collector.Installed && collector.State is "Running" or "Starting, first collection pending";
+            Check("Collector", collecting, collector.Details is null ? collector.State : $"{collector.State}: {collector.Details}", ref failures);
+            if (collector.State == "Starting, first collection pending")
+                Console.WriteLine("WARN  First collection is still pending; check again in about one minute.");
         }
 
-        if (File.Exists(AppDataPaths.DatabasePath))
+        if (databaseHealthy)
         {
             using var store = new TrafficStore();
             var storeStatus = store.GetStatus();
@@ -98,12 +103,13 @@ internal static class DiagnosticsCommand
             Console.WriteLine($"INFO  Tracked interfaces: {storeStatus.TrackedInterfaces}, stored minutes: {storeStatus.StoredMinutes}");
             var stored = store.ReadTotalReportRows(DateTimeOffset.UtcNow);
             const long significantThreshold = 1_048_576; // 1 MiB
-            var significant = stored.Where(row => row.TotalBytes >= significantThreshold).ToArray();
+            var significant = stored.Where(row => row.TotalBytes >= significantThreshold ||
+                NetworkInterfaceSelector.IsLikelyPhysical(row.InterfaceName, row.InterfaceDescription, row.InterfaceType)).ToArray();
             var hidden = stored.Count - significant.Length;
             foreach (var row in significant)
                 Console.WriteLine($"      {row.InterfaceName}: {ByteFormatter.Format(row.BytesReceived)} recv, {ByteFormatter.Format(row.BytesSent)} sent [OctetLedger history]");
             if (hidden > 0)
-                Console.WriteLine($"      ({hidden} interface(s) with < 1 MiB total hidden)");
+                Console.WriteLine($"      ({hidden} nonphysical interface(s) with < 1 MiB total hidden)");
             if (stored.Count > 0 && activeInterfaces.Length > 0)
                 Console.WriteLine("INFO  Windows counters and OctetLedger history cover different time windows.");
         }

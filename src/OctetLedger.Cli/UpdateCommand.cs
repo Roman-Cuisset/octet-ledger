@@ -44,7 +44,8 @@ internal static class UpdateCommand
         }
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or
                                           InvalidDataException or IOException or UnauthorizedAccessException or
-                                          InvalidOperationException or PlatformNotSupportedException)
+                                          InvalidOperationException or PlatformNotSupportedException or TimeoutException or
+                                          System.ComponentModel.Win32Exception)
         {
             Console.Error.WriteLine($"Update failed: {exception.Message}");
             return 1;
@@ -53,24 +54,23 @@ internal static class UpdateCommand
 
     public static async Task MaybeNotifyAsync(Version currentVersion)
     {
-        var settings = OctetLedgerSettings.Load();
-        if (!settings.CheckForUpdates ||
-            settings.LastUpdateCheckUtc is { } checkedAt && DateTimeOffset.UtcNow - checkedAt < AutomaticCheckInterval)
-            return;
-
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try
         {
+            var settings = OctetLedgerSettings.Load();
+            if (!settings.CheckForUpdates ||
+                settings.LastUpdateCheckUtc is { } checkedAt && DateTimeOffset.UtcNow - checkedAt < AutomaticCheckInterval)
+                return;
+
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             var attemptedAt = DateTimeOffset.UtcNow;
-            settings = settings with { LastUpdateCheckUtc = attemptedAt };
-            settings.Save();
+            OctetLedgerSettings.Update(current => current with { LastUpdateCheckUtc = attemptedAt });
             using var client = CreateClient();
             var release = await new UpdateChecker(client).CheckAsync(currentVersion, cancellation.Token);
-            (settings with
+            OctetLedgerSettings.Update(current => current with
             {
                 LastSuccessfulUpdateCheckUtc = DateTimeOffset.UtcNow,
                 LatestKnownVersion = release?.Version.ToString()
-            }).Save();
+            });
             if (release is not null)
                 Console.Error.WriteLine($"Update available: OctetLedger {release.Version}. Run 'octetledger update install'.");
         }
@@ -86,13 +86,12 @@ internal static class UpdateCommand
     {
         using var client = CreateClient();
         var release = await new UpdateChecker(client).CheckAsync(currentVersion);
-        var settings = OctetLedgerSettings.Load();
-        (settings with
+        OctetLedgerSettings.Update(current => current with
         {
             LastUpdateCheckUtc = DateTimeOffset.UtcNow,
             LastSuccessfulUpdateCheckUtc = DateTimeOffset.UtcNow,
             LatestKnownVersion = release?.Version.ToString()
-        }).Save();
+        });
         Console.WriteLine($"Current version: {currentVersion}");
         if (release is null)
         {
@@ -147,15 +146,15 @@ internal static class UpdateCommand
         };
         foreach (var argument in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-WaitForProcessId", Environment.ProcessId.ToString(CultureInfo.InvariantCulture) })
             startInfo.ArgumentList.Add(argument);
-        System.Diagnostics.Process.Start(startInfo)?.Dispose();
+        using var rollback = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("The rollback process could not be started.");
         Console.WriteLine("Rollback started. This process will exit so the executable can be replaced.");
         return 0;
     }
 
     private static void SaveUpdatePreference(bool enabled)
     {
-        var settings = OctetLedgerSettings.Load();
-        (settings with { CheckForUpdates = enabled }).Save();
+        OctetLedgerSettings.Update(current => current with { CheckForUpdates = enabled });
     }
 
     private static HttpClient CreateClient() => new() { Timeout = TimeSpan.FromSeconds(10) };

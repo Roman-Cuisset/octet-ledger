@@ -1,6 +1,32 @@
 # Changelog
 
 
+## Unreleased
+
+### Collector reliability
+
+- Add an independent per-user scheduled watchdog for missing workers, missing launchers, and workers with no successful collection for more than three minutes.
+- Replace the semaphore with a directory-scoped exclusive file lock that Windows releases after a forced process termination.
+- Keep deliberate stops persistent across supervision checks; preserve the last successful collection timestamp and require fresh readiness when starting.
+- Isolate startup registrations and watchdog tasks by data directory; preserve the installation's `LOCALAPPDATA` in both generated scripts.
+- Schedule the watchdog's first timer in the future with an explicit UTC boundary so task replacement does not miss its initial trigger.
+
+### Correctness and recovery
+
+- Reject non-finite live/monitor intervals and invalid or repeated global data-directory options without crashing.
+- Serialize settings mutations and preserve unrelated concurrent changes; reject malformed settings without overwriting the original file.
+- Preserve committed WAL traffic during database restoration; reject invalid schemas and orphaned traffic without replacing a healthy destination.
+- Archive retention by local calendar day, handle daylight-saving boundaries, and exclude daily archives from hourly reports.
+- Respect explicit virtual-interface preferences, select active zero-byte adapters, and keep every period when falling back to a historical interface.
+- Rebaseline both traffic-rate directions when either interface counter resets.
+- Reject overflowing or rounded-to-zero budgets; report undefined comparison changes when previous usage is zero.
+- Render dashboard interface names as text, use server-local calendar dates, distinguish missing history from zero traffic, and show API failures and actual interface scope.
+- Keep low-traffic physical interfaces visible in diagnostics and report stopped or delayed collectors as unhealthy.
+- Handle malformed update metadata and terminate version-probe children on cancellation or timeout.
+- Include IPv6 ETW traffic events and surface capture failures without leaving the command waiting for its configured duration.
+- Validate rollback candidates before interruption; retain executable recovery backups on restoration failure and clean failed fresh installations.
+- Fix executable restoration under Windows PowerShell by using a real backup path instead of a null string argument to `File.Replace`.
+
 ## 0.7.0
 
 ### Clarity

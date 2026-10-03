@@ -84,12 +84,16 @@ public sealed class TrafficStore : IDisposable
         command.CommandText = """
             SELECT b.interface_id, s.name, b.minute_utc, b.bytes_received, b.bytes_sent,
                    b.interval_seconds, b.peak_bytes_per_second, b.longest_interval_seconds,
-                   s.description, s.type
+                   s.description, s.type, b.is_daily_archive
             FROM (
-                SELECT * FROM traffic_minute
+                SELECT interface_id, minute_utc, bytes_received, bytes_sent,
+                       interval_seconds, peak_bytes_per_second, longest_interval_seconds,
+                       0 AS is_daily_archive
+                FROM traffic_minute
                 UNION ALL
                 SELECT interface_id, day_utc AS minute_utc, bytes_received, bytes_sent,
-                       interval_seconds, peak_bytes_per_second, longest_interval_seconds
+                       interval_seconds, peak_bytes_per_second, longest_interval_seconds,
+                       1 AS is_daily_archive
                 FROM traffic_archive_day
             ) b
             JOIN adapter_state s ON s.interface_id = b.interface_id
@@ -112,7 +116,8 @@ public sealed class TrafficStore : IDisposable
                 reader.GetDouble(6),
                 reader.GetDouble(7),
                 reader.GetString(8),
-                reader.GetString(9)));
+                reader.GetString(9),
+                reader.GetBoolean(10)));
         }
 
         return buckets;
@@ -259,7 +264,25 @@ public sealed class TrafficStore : IDisposable
             : null;
         try
         {
-            File.Copy(source, temporary, overwrite: false);
+            using (var sourceConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = source,
+                Mode = SqliteOpenMode.ReadOnly,
+                Cache = SqliteCacheMode.Private,
+                Pooling = false
+            }.ToString()))
+            using (var stagedConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = temporary,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+                Cache = SqliteCacheMode.Private,
+                Pooling = false
+            }.ToString()))
+            {
+                sourceConnection.Open();
+                stagedConnection.Open();
+                sourceConnection.BackupDatabase(stagedConnection);
+            }
             var copiedCheck = CheckIntegrity(temporary);
             if (!copiedCheck.IsHealthy)
                 throw new InvalidDataException($"Copied restore database failed SQLite integrity check: {string.Join("; ", copiedCheck.Messages)}");
@@ -276,10 +299,20 @@ public sealed class TrafficStore : IDisposable
         }
     }
 
-    public RetentionResult ApplyRetention(int rawDays, DateTimeOffset nowUtc)
+    public RetentionResult ApplyRetention(int rawDays, DateTimeOffset nowUtc) =>
+        ApplyRetention(rawDays, nowUtc, TimeZoneInfo.Local);
+
+    internal RetentionResult ApplyRetention(int rawDays, DateTimeOffset nowUtc, TimeZoneInfo timeZone)
     {
         if (rawDays is < 1 or > 3660) throw new ArgumentOutOfRangeException(nameof(rawDays));
-        var cutoff = new DateTimeOffset(nowUtc.UtcDateTime.Date, TimeSpan.Zero).AddDays(-rawDays);
+        var cutoffLocal = TimeZoneInfo.ConvertTime(nowUtc, timeZone).Date.AddDays(-rawDays);
+        var cutoff = CalendarPeriods.StartOfDayUtc(cutoffLocal, timeZone);
+        connection.CreateFunction("retention_day", (string timestamp) =>
+        {
+            var utc = DateTimeOffset.Parse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+            var localDay = TimeZoneInfo.ConvertTime(utc, timeZone).Date;
+            return FormatTimestamp(CalendarPeriods.StartOfDayUtc(localDay, timeZone));
+        }, isDeterministic: true);
         using var transaction = connection.BeginTransaction();
         using var archive = connection.CreateCommand();
         archive.Transaction = transaction;
@@ -287,12 +320,12 @@ public sealed class TrafficStore : IDisposable
             INSERT INTO traffic_archive_day (
                 interface_id, day_utc, bytes_received, bytes_sent, interval_seconds,
                 peak_bytes_per_second, longest_interval_seconds)
-            SELECT interface_id, substr(minute_utc, 1, 10) || 'T00:00:00.0000000+00:00',
+            SELECT interface_id, retention_day(minute_utc),
                    SUM(bytes_received), SUM(bytes_sent), SUM(interval_seconds),
                    MAX(peak_bytes_per_second), MAX(longest_interval_seconds)
             FROM traffic_minute
             WHERE minute_utc < $cutoff
-            GROUP BY interface_id, substr(minute_utc, 1, 10)
+            GROUP BY interface_id, retention_day(minute_utc)
             ON CONFLICT(interface_id, day_utc) DO UPDATE SET
                 bytes_received = bytes_received + excluded.bytes_received,
                 bytes_sent = bytes_sent + excluded.bytes_sent,

@@ -5,8 +5,19 @@ public static class AppDataPaths
     private static string? configuredDataDirectory;
 
     public static string DataDirectory => configuredDataDirectory ?? Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        DefaultLocalApplicationDataDirectory,
         "OctetLedger");
+
+    private static string DefaultLocalApplicationDataDirectory
+    {
+        get
+        {
+            var configured = OperatingSystem.IsWindows() ? Environment.GetEnvironmentVariable("LOCALAPPDATA") : null;
+            return !string.IsNullOrWhiteSpace(configured)
+                ? configured
+                : Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        }
+    }
 
     public static string DatabasePath => Path.Combine(DataDirectory, "octetledger.db");
 

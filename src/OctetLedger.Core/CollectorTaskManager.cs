@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace OctetLedger.Core;
 
@@ -13,53 +15,44 @@ public enum CollectorStartupState
 
 internal sealed class CollectorProcessLock : IDisposable
 {
-    private Semaphore? semaphore;
+    private FileStream? stream;
 
-    private CollectorProcessLock(Semaphore semaphore)
+    private CollectorProcessLock(FileStream stream)
     {
-        this.semaphore = semaphore;
+        this.stream = stream;
     }
 
     public static CollectorProcessLock? TryAcquire(string name)
     {
-        var candidate = new Semaphore(1, 1, name);
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(name)));
+        var path = Path.Combine(Path.GetTempPath(), $"octetledger-lock-{key}");
         try
         {
-            if (!candidate.WaitOne(0))
-            {
-                candidate.Dispose();
-                return null;
-            }
-            return new CollectorProcessLock(candidate);
+            return new CollectorProcessLock(new FileStream(path, FileMode.OpenOrCreate,
+                FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose));
         }
-        catch
+        catch (IOException)
         {
-            candidate.Dispose();
-            throw;
+            return null;
         }
     }
 
     public void Dispose()
     {
-        var acquired = Interlocked.Exchange(ref semaphore, null);
-        if (acquired is null) return;
-        try
-        {
-            acquired.Release();
-        }
-        finally
-        {
-            acquired.Dispose();
-        }
+        Interlocked.Exchange(ref stream, null)?.Dispose();
     }
 }
 
 public static class CollectorTaskManager
 {
-    private const string CollectorLockName = @"Local\OctetLedgerCollector";
+    private static string InstallationId => Convert.ToHexString(SHA256.HashData(
+        Encoding.UTF8.GetBytes(Path.GetFullPath(AppDataPaths.DataDirectory).ToUpperInvariant())))[..16];
+    private static string CollectorLockName => $@"Local\OctetLedgerCollector.{InstallationId}";
+    public static string WatchdogTaskName => $"OctetLedger Watchdog {InstallationId}";
+    public static string WatchdogPath => Path.Combine(AppDataPaths.DataDirectory, "collector-watchdog.vbs");
     internal static readonly TimeSpan CollectionDelayThreshold = TimeSpan.FromMinutes(OctetLedgerDefaults.DelayedCollectionMinutes);
     private static CollectorProcessLock? collectorLock;
-    public const string StartupValueName = "OctetLedger Collector";
+    public static string StartupValueName => $"OctetLedger Collector {InstallationId}";
     public static string LauncherPath => Path.Combine(AppDataPaths.DataDirectory, "collector.vbs");
     public static string PidPath => Path.Combine(AppDataPaths.DataDirectory, "collector.pid");
     public static string ReadyPath => Path.Combine(AppDataPaths.DataDirectory, "collector.ready");
@@ -71,10 +64,15 @@ public static class CollectorTaskManager
     {
         var registered = Run("reg.exe", "query", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", StartupValueName).ExitCode == 0;
         var launcherExists = File.Exists(LauncherPath);
-        var installed = registered && launcherExists;
+        var watchdogInstalled = File.Exists(WatchdogPath) &&
+            Run("schtasks.exe", "/Query", "/TN", WatchdogTaskName).ExitCode == 0;
         using var process = TryGetRunningProcess();
         var running = process is not null || IsCollectorLockHeld();
-        return DetermineStatus(registered, launcherExists, running, ReadLastSuccess(), DateTimeOffset.UtcNow, ReadConsecutiveErrors());
+        var status = DetermineStatus(registered, launcherExists && watchdogInstalled, running,
+            ReadLastSuccess(), DateTimeOffset.UtcNow, ReadConsecutiveErrors());
+        if (!watchdogInstalled && registered)
+            return status with { Details = "Independent watchdog is missing. Run 'octetledger collector install' to repair supervision." };
+        return status;
     }
 
     public static void Install(string executablePath)
@@ -94,15 +92,33 @@ public static class CollectorTaskManager
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }
+        File.WriteAllText(WatchdogPath, BuildWatchdogScript(fullPath));
+        var taskFile = Path.Combine(AppDataPaths.DataDirectory, $"watchdog-{Guid.NewGuid():N}.xml");
+        try
+        {
+            File.WriteAllText(taskFile, BuildWatchdogTaskXml(WatchdogPath, DateTime.UtcNow.AddMinutes(1)), Encoding.Unicode);
+            EnsureSuccess(Run("schtasks.exe", "/Create", "/TN", WatchdogTaskName,
+                "/XML", taskFile, "/F"), "register collector watchdog");
+        }
+        finally
+        {
+            File.Delete(taskFile);
+        }
         var result = Run("reg.exe", "add", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", StartupValueName,
             "/t", "REG_SZ", "/d", $"wscript.exe //B //Nologo \"{LauncherPath}\"", "/f");
         EnsureSuccess(result, "register automatic startup");
+        var legacy = Run("reg.exe", "query", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", "OctetLedger Collector");
+        if (legacy.ExitCode == 0 && legacy.Output.Contains(LauncherPath, StringComparison.OrdinalIgnoreCase))
+            Run("reg.exe", "delete", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", "OctetLedger Collector", "/f");
     }
 
     public static CollectorStartupState Start()
     {
+        using var controlLock = CollectorProcessLock.TryAcquire($"OctetLedgerControl.{InstallationId}");
+        if (controlLock is null) return CollectorStartupState.Pending;
         var registered = Run("reg.exe", "query", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", StartupValueName).ExitCode == 0;
-        if (!File.Exists(LauncherPath) || !registered)
+        if (!File.Exists(LauncherPath) || !File.Exists(WatchdogPath) || !registered ||
+            Run("schtasks.exe", "/Query", "/TN", WatchdogTaskName).ExitCode != 0)
         {
             var executable = Environment.ProcessPath;
             if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable))
@@ -110,30 +126,53 @@ public static class CollectorTaskManager
             Install(executable);
         }
 
+        TryDeleteStopFile();
         using var existingProcess = TryGetRunningProcess();
-        var existingRunning = existingProcess is not null || IsCollectorLockHeld();
         var lastSuccess = ReadLastSuccess();
-        if (existingRunning && lastSuccess is not null && DateTimeOffset.UtcNow - lastSuccess <= CollectionDelayThreshold)
+        if (existingProcess is not null && lastSuccess is not null &&
+            lastSuccess >= existingProcess.StartTime.ToUniversalTime() && DateTimeOffset.UtcNow - lastSuccess <= CollectionDelayThreshold)
             return CollectorStartupState.Ready;
-        if (!existingRunning)
+        if (existingProcess is not null && ShouldRestartCollector(lastSuccess,
+            existingProcess.StartTime.ToUniversalTime(), DateTimeOffset.UtcNow))
+        {
+            RecordBackgroundError(new TimeoutException("Watchdog restarting collector: no successful collection for more than three minutes."));
+            Stop();
+            TryDeleteStopFile();
+        }
+        if (existingProcess is null || existingProcess.HasExited)
         {
             TryDeleteStopFile();
-            TryDeleteReadyFile();
-            Process.Start(new ProcessStartInfo("wscript.exe", $"//B //Nologo \"{LauncherPath}\"") { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo("wscript.exe", $"//B //Nologo \"{LauncherPath}\"") { UseShellExecute = true })?.Dispose();
         }
         var startup = WaitForStartup(() =>
         {
             using var process = TryGetRunningProcess();
             var running = process is not null || IsCollectorLockHeld();
             var success = ReadLastSuccess();
-            return (running, success is not null && DateTimeOffset.UtcNow - success <= CollectionDelayThreshold);
+            return (running, process is not null && success is not null &&
+                success >= process.StartTime.ToUniversalTime() && DateTimeOffset.UtcNow - success <= CollectionDelayThreshold);
         });
         if (startup is CollectorStartupState.Ready or CollectorStartupState.Pending) return startup;
         throw new InvalidOperationException($"Collector could not be launched. See '{LogPath}' if it was created.");
     }
 
+    internal static bool ShouldRestartCollector(DateTimeOffset? lastSuccess, DateTimeOffset startedUtc, DateTimeOffset nowUtc)
+    {
+        var observed = lastSuccess is not null && lastSuccess >= startedUtc ? lastSuccess.Value : startedUtc;
+        return nowUtc - observed > CollectionDelayThreshold;
+    }
+
+    public static void EnsureRunning()
+    {
+        // A persistent marker distinguishes deliberate stop/update from a crash.
+        if (StopRequested) return;
+        Start();
+    }
+
     public static void Stop()
     {
+        Directory.CreateDirectory(AppDataPaths.DataDirectory);
+        File.WriteAllText(StopPath, DateTimeOffset.UtcNow.ToString("O"));
         using var process = TryGetRunningProcess();
         if (process is null)
         {
@@ -145,9 +184,6 @@ public static class CollectorTaskManager
                     throw new InvalidOperationException("Collector did not stop cleanly and its process identity is unavailable. Sign out or restart Windows before retrying.");
             }
             TryDeletePidFile();
-            TryDeleteReadyFile();
-            TryDeleteErrorStateFile();
-            TryDeleteStopFile();
             return;
         }
         File.WriteAllText(StopPath, DateTimeOffset.UtcNow.ToString("O"));
@@ -157,16 +193,17 @@ public static class CollectorTaskManager
             process.WaitForExit(5000);
         }
         TryDeletePidFile();
-        TryDeleteReadyFile();
-        TryDeleteErrorStateFile();
-        TryDeleteStopFile();
     }
 
     public static void Uninstall()
     {
         Stop();
-        Run("reg.exe", "delete", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", StartupValueName, "/f");
+        if (Run("schtasks.exe", "/Query", "/TN", WatchdogTaskName).ExitCode == 0)
+            EnsureSuccess(Run("schtasks.exe", "/Delete", "/TN", WatchdogTaskName, "/F"), "remove collector watchdog");
+        if (Run("reg.exe", "query", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", StartupValueName).ExitCode == 0)
+            EnsureSuccess(Run("reg.exe", "delete", @"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", StartupValueName, "/f"), "remove collector startup");
         if (File.Exists(LauncherPath)) File.Delete(LauncherPath);
+        if (File.Exists(WatchdogPath)) File.Delete(WatchdogPath);
         TryDeletePidFile();
         TryDeleteReadyFile();
     }
@@ -178,9 +215,6 @@ public static class CollectorTaskManager
         try
         {
             Directory.CreateDirectory(AppDataPaths.DataDirectory);
-            TryDeleteStopFile();
-            TryDeleteReadyFile();
-            TryDeleteErrorStateFile();
             using var current = Process.GetCurrentProcess();
             var executable = Path.GetFullPath(Environment.ProcessPath ?? current.MainModule?.FileName
                 ?? throw new InvalidOperationException("Collector executable path is unavailable."));
@@ -202,7 +236,16 @@ public static class CollectorTaskManager
 
     public static void MarkBackgroundReady()
     {
-        File.WriteAllText(ReadyPath, DateTimeOffset.UtcNow.ToString("O"));
+        var temporary = $"{ReadyPath}.{Environment.ProcessId}.tmp";
+        try
+        {
+            File.WriteAllText(temporary, DateTimeOffset.UtcNow.ToString("O"));
+            File.Move(temporary, ReadyPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
         TryDeleteErrorStateFile();
     }
 
@@ -226,15 +269,19 @@ public static class CollectorTaskManager
 
     public static void ReleaseBackgroundProcess()
     {
-        if (File.Exists(PidPath))
+        try
         {
-            var text = File.ReadAllText(PidPath).Split('|', 2)[0];
-            if (int.TryParse(text, out var pid) && pid == Environment.ProcessId) TryDeletePidFile();
+            if (File.Exists(PidPath))
+            {
+                var text = File.ReadAllText(PidPath).Split('|', 2)[0];
+                if (int.TryParse(text, out var pid) && pid == Environment.ProcessId) TryDeletePidFile();
+            }
         }
-        TryDeleteStopFile();
-        TryDeleteReadyFile();
-        collectorLock?.Dispose();
-        collectorLock = null;
+        finally
+        {
+            collectorLock?.Dispose();
+            collectorLock = null;
+        }
     }
 
     private static Process? TryGetRunningProcess()
@@ -253,6 +300,8 @@ public static class CollectorTaskManager
             }
             catch (ArgumentException) { }
             catch (InvalidOperationException) { }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
             TryDeletePidFile();
         }
 
@@ -287,15 +336,8 @@ public static class CollectorTaskManager
 
     private static bool IsCollectorLockHeld()
     {
-        if (!OperatingSystem.IsWindows()) return false;
-        try
-        {
-            using var semaphore = Semaphore.OpenExisting(CollectorLockName);
-            if (!semaphore.WaitOne(0)) return true;
-            semaphore.Release();
-            return false;
-        }
-        catch (WaitHandleCannotBeOpenedException) { return false; }
+        using var processLock = CollectorProcessLock.TryAcquire(CollectorLockName);
+        return processLock is null;
     }
 
     private static DateTimeOffset? ReadLastSuccess()
@@ -406,21 +448,26 @@ public static class CollectorTaskManager
             Option Explicit
             Dim shell, fileSystem, command, exitCode
             Set shell = CreateObject("Wscript.Shell")
+            shell.Environment("Process")("LOCALAPPDATA") = "{Path.GetDirectoryName(AppDataPaths.DataDirectory)!.Replace("\"", "\"\"", StringComparison.Ordinal)}"
             Set fileSystem = CreateObject("Scripting.FileSystemObject")
             command = Chr(34) & "{escapedPath}" & Chr(34) & " monitor --interval {OctetLedgerDefaults.CollectionIntervalSeconds} --quiet --background"
+            Dim stopPath
+            stopPath = "{StopPath.Replace("\"", "\"\"", StringComparison.Ordinal)}"
             On Error Resume Next
             Do
+                If fileSystem.FileExists(stopPath) Then Exit Do
                 Err.Clear
                 exitCode = shell.Run(command, 0, True)
                 If Err.Number <> 0 Then
                     AppendLog "Launcher error " & CStr(Err.Number) & ": " & Err.Description
                     Err.Clear
                     WScript.Sleep 30000
-                ElseIf exitCode <> 0 Then
+                ElseIf exitCode = 3 Then
+                    Exit Do
+                Else
+                    If fileSystem.FileExists(stopPath) Then Exit Do
                     AppendLog "Collector exited with code " & CStr(exitCode) & "; restarting"
                     WScript.Sleep 5000
-                Else
-                    Exit Do
                 End If
             Loop
 
@@ -430,6 +477,45 @@ public static class CollectorTaskManager
                 stream.WriteLine Now & " " & message
                 stream.Close
             End Sub
+            """;
+    }
+
+    private static string BuildWatchdogScript(string executablePath)
+    {
+        var escaped = executablePath.Replace("\"", "\"\"", StringComparison.Ordinal);
+        return $"""
+            Option Explicit
+            Dim shell
+            Set shell = CreateObject("Wscript.Shell")
+            shell.Environment("Process")("LOCALAPPDATA") = "{Path.GetDirectoryName(AppDataPaths.DataDirectory)!.Replace("\"", "\"\"", StringComparison.Ordinal)}"
+            WScript.Quit shell.Run(Chr(34) & "{escaped}" & Chr(34) & " collector ensure", 0, True)
+            """;
+    }
+
+    internal static string BuildWatchdogTaskXml(string watchdogPath, DateTime start)
+    {
+        var user = System.Security.SecurityElement.Escape($"{Environment.UserDomainName}\\{Environment.UserName}");
+        var arguments = System.Security.SecurityElement.Escape($"//B //Nologo \"{watchdogPath}\"");
+        return $"""
+            <?xml version="1.0" encoding="utf-16"?>
+            <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+              <Triggers>
+                <CalendarTrigger>
+                  <Repetition><Interval>PT1M</Interval><Duration>P1D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
+                  <StartBoundary>{start.ToString("yyyy-MM-ddTHH:mm:ssK", System.Globalization.CultureInfo.InvariantCulture)}</StartBoundary>
+                  <Enabled>true</Enabled><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
+                </CalendarTrigger>
+                <LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger>
+              </Triggers>
+              <Principals><Principal id="User"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+              <Settings>
+                <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+                <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+                <StartWhenAvailable>true</StartWhenAvailable><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+                <Enabled>true</Enabled><Hidden>true</Hidden><ExecutionTimeLimit>PT2M</ExecutionTimeLimit>
+              </Settings>
+              <Actions Context="User"><Exec><Command>wscript.exe</Command><Arguments>{arguments}</Arguments></Exec></Actions>
+            </Task>
             """;
     }
 

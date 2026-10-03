@@ -20,35 +20,60 @@ if ($WaitForProcessId -gt 0) {
         Wait-Process -InputObject $parent -Timeout $WaitForProcessTimeoutSeconds -ErrorAction Stop
     }
 }
-& $installedExecutable collector stop 2>$null | Out-Null
+$previousVersion = & $previousExecutable version 2>&1
+if ($LASTEXITCODE -ne 0 -or ($previousVersion -join "`n") -notmatch '^OctetLedger\s+') {
+    throw 'The previous executable failed validation. The current installation was not changed.'
+}
+$replacementMade = $false
+try {
+    & $installedExecutable collector stop 2>$null | Out-Null
 
-# Clean up any collector process holding the executable.
-Get-CimInstance Win32_Process -Filter "Name='octetledger.exe'" -ErrorAction SilentlyContinue |
-    Where-Object {
-        $_.ExecutablePath -eq $installedExecutable -and
-        $_.CommandLine -match '\smonitor\s' -and
-        $_.CommandLine -match '--background'
-    } |
-    ForEach-Object {
-        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    # Clean up any collector process holding the executable.
+    Get-CimInstance Win32_Process -Filter "Name='octetledger.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ExecutablePath -eq $installedExecutable -and
+            $_.CommandLine -match '\smonitor\s' -and
+            $_.CommandLine -match '--background'
+        } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+
+    for ($attempt = 1; $attempt -le 20; $attempt++) {
+        try {
+            [System.IO.File]::Replace($previousExecutable, $installedExecutable, $failedExecutable, $true)
+            $replacementMade = $true
+            break
+        }
+        catch {
+            if ($attempt -eq 20) { throw }
+            Start-Sleep -Milliseconds 250
+        }
     }
-
-for ($attempt = 1; $attempt -le 20; $attempt++) {
+    $version = & $installedExecutable version 2>&1
+    if ($LASTEXITCODE -ne 0 -or ($version -join "`n") -notmatch '^OctetLedger\s+') {
+        throw 'The previous executable failed validation after replacement.'
+    }
+    & $installedExecutable collector install
+    if ($LASTEXITCODE -ne 0) { throw 'The previous version could not reinstall its collector.' }
+    Remove-Item -LiteralPath $failedExecutable -Force -ErrorAction SilentlyContinue
+    Write-Host "Rollback complete: $($version -join ' ')"
+}
+catch {
+    if ($replacementMade -and (Test-Path -LiteralPath $failedExecutable)) {
+        try { & $installedExecutable collector stop 2>$null | Out-Null } catch {}
+        try {
+            [System.IO.File]::Replace($failedExecutable, $installedExecutable, $previousExecutable, $true)
+        }
+        catch {
+            Write-Warning "Could not restore the current version. Its executable backup is retained at: $failedExecutable"
+            throw
+        }
+    }
     try {
-        [System.IO.File]::Replace($previousExecutable, $installedExecutable, $failedExecutable, $true)
-        break
+        & $installedExecutable collector install 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { Write-Warning 'The current version was preserved, but its collector could not be restarted.' }
     }
-    catch {
-        if ($attempt -eq 20) { throw }
-        Start-Sleep -Milliseconds 250
-    }
+    catch { Write-Warning "The current version was preserved, but its collector could not be restarted: $_" }
+    throw
 }
-$version = & $installedExecutable version 2>&1
-if ($LASTEXITCODE -ne 0 -or ($version -join "`n") -notmatch '^OctetLedger\s+') {
-    [System.IO.File]::Replace($failedExecutable, $installedExecutable, $null, $true)
-    throw 'The previous executable failed validation; the current version was restored.'
-}
-Remove-Item -LiteralPath $failedExecutable -Force -ErrorAction SilentlyContinue
-& $installedExecutable collector install
-if ($LASTEXITCODE -ne 0) { throw 'Rollback completed, but the collector could not be restarted.' }
-Write-Host "Rollback complete: $($version -join ' ')"

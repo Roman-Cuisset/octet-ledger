@@ -56,6 +56,7 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
     }
     catch {
         if ($attempt -eq 20) {
+            Remove-Item -LiteralPath $stagedExecutable -Force -ErrorAction SilentlyContinue
             throw
         }
         Start-Sleep -Milliseconds 250
@@ -66,13 +67,19 @@ if (-not $staged) {
 }
 
 # Validate the staged executable before interrupting a working installation.
-$stagedVersion = & $stagedExecutable version 2>&1
-if ($LASTEXITCODE -ne 0 -or ($stagedVersion -join "`n") -notmatch '^OctetLedger\s+') {
+try {
+    $stagedVersion = & $stagedExecutable version 2>&1
+    if ($LASTEXITCODE -ne 0 -or ($stagedVersion -join "`n") -notmatch '^OctetLedger\s+') {
+        throw 'The staged OctetLedger executable failed its startup validation. The existing installation was not changed.'
+    }
+}
+catch {
     Remove-Item -LiteralPath $stagedExecutable -Force -ErrorAction SilentlyContinue
-    throw 'The staged OctetLedger executable failed its startup validation. The existing installation was not changed.'
+    throw
 }
 
 $replacementMade = $false
+$pathAdded = $false
 try {
     if ($hadExistingInstallation) {
         # Preserve the launcher and Run registration throughout the update.
@@ -116,6 +123,7 @@ try {
     if ($pathEntries -notcontains $installDirectory) {
         $newUserPath = (($pathEntries + $installDirectory) -join ';')
         [Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
+        $pathAdded = $true
     }
     $rollbackScript = Join-Path $PSScriptRoot 'rollback.ps1'
     if (Test-Path -LiteralPath $rollbackScript) {
@@ -146,7 +154,7 @@ catch {
                 }
             for ($attempt = 1; $attempt -le 20; $attempt++) {
                 try {
-                    [System.IO.File]::Replace($operationBackup, $installedExecutable, $null, $true)
+                    [System.IO.File]::Replace($operationBackup, $installedExecutable, $stagedExecutable, $true)
                     break
                 }
                 catch {
@@ -156,12 +164,21 @@ catch {
             }
         }
         try { & $installedExecutable collector start 2>$null | Out-Null } catch {}
+    } elseif ($replacementMade) {
+        try { & $installedExecutable collector uninstall 2>$null | Out-Null } catch {}
+        Remove-Item -LiteralPath $installedExecutable -Force -ErrorAction SilentlyContinue
+    }
+    if ($pathAdded) {
+        $currentPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+        $remainingEntries = $currentPath -split ';' | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne $installDirectory
+        }
+        [Environment]::SetEnvironmentVariable('Path', ($remainingEntries -join ';'), 'User')
     }
     throw
 }
 finally {
     Remove-Item -LiteralPath $stagedExecutable -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $operationBackup -Force -ErrorAction SilentlyContinue
 }
 Write-Host "Open a new terminal, then run: octetledger"
 if (-not [string]::IsNullOrWhiteSpace($CleanupDirectory)) {

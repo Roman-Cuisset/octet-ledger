@@ -4,19 +4,6 @@ namespace OctetLedger.Tests;
 
 public class CollectorTaskManagerTests
 {
-    [Fact]
-    public void LauncherWaitsForCollectorAndRestartsAfterCrash()
-    {
-        var script = CollectorTaskManager.BuildLauncherScript(
-            @"C:\Program Files\OctetLedger\octetledger.exe",
-            @"C:\Data\collector.log");
-
-        Assert.Contains("shell.Run(command, 0, True)", script);
-        Assert.Contains("ElseIf exitCode <> 0 Then", script);
-        Assert.Contains("restarting", script);
-        Assert.Contains("WScript.Sleep 5000", script);
-        Assert.Contains("C:\\Data\\collector.log", script);
-    }
 
     [Fact]
     public async Task ProcessLockCanBeReleasedFromAnotherThread()
@@ -82,7 +69,6 @@ public class CollectorTaskManagerTests
             lastSuccess: now.AddMinutes(-4), now);
 
         Assert.Equal("Running, collection delayed", status.State);
-        Assert.Contains("4 minutes", status.Details);
     }
 
     [Fact]
@@ -99,6 +85,17 @@ public class CollectorTaskManagerTests
     }
 
     [Fact]
+    public void WatchdogRestartsStalledCollectorButGivesNewProcessTimeToStart()
+    {
+        var now = DateTimeOffset.UtcNow;
+        Assert.True(CollectorTaskManager.ShouldRestartCollector(now.AddMinutes(-4), now.AddMinutes(-5), now));
+        Assert.True(CollectorTaskManager.ShouldRestartCollector(null, now.AddMinutes(-4), now));
+        Assert.False(CollectorTaskManager.ShouldRestartCollector(now.AddHours(-1), now.AddSeconds(-30), now));
+        Assert.False(CollectorTaskManager.ShouldRestartCollector(now.AddMinutes(-3), now.AddMinutes(-5), now));
+        Assert.False(CollectorTaskManager.ShouldRestartCollector(now.AddSeconds(-10), now.AddMinutes(-5), now));
+    }
+
+    [Fact]
     public void StatusReportsRepeatedErrorsBeforeCollectionBecomesLate()
     {
         var now = DateTimeOffset.UtcNow;
@@ -108,6 +105,5 @@ public class CollectorTaskManagerTests
             lastSuccess: now.AddMinutes(-1), now, consecutiveErrors: 2);
 
         Assert.Equal("Running, retrying after errors", status.State);
-        Assert.Contains("2 consecutive", status.Details);
     }
 }

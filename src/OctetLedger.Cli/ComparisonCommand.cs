@@ -31,10 +31,15 @@ internal static class ComparisonCommand
         var buckets = TrafficReport.SelectInterface(store.ReadBuckets(new DateTimeOffset(range.SecondStart).ToUniversalTime()), null, settings.PreferredInterfaceId);
         var first = Sum(buckets, range.FirstStart, range.FirstEnd);
         var second = Sum(buckets, range.SecondStart, range.SecondEnd);
-        var change = second == 0 ? (first == 0 ? 0 : 100) : (first - second) * 100d / second;
         Console.WriteLine($"{range.FirstName,-12} {ByteFormatter.Format(first),12}");
         Console.WriteLine($"{range.SecondName,-12} {ByteFormatter.Format(second),12}");
-        Console.WriteLine($"Change       {change:+0.0;-0.0;0.0}%");
+        if (second == 0 && first > 0)
+            Console.WriteLine("Change       n/a (no previous usage)");
+        else
+        {
+            var change = second == 0 ? 0 : (first - second) * 100d / second;
+            Console.WriteLine($"Change       {change:+0.0;-0.0;0.0}%");
+        }
         if (range.FirstName == "this month")
         {
             var elapsed = Math.Max(1, now.Day - 1 + now.TimeOfDay.TotalDays);

@@ -57,7 +57,8 @@ internal sealed partial class UpdateInstaller
             startInfo.ArgumentList.Add(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             startInfo.ArgumentList.Add("-CleanupDirectory");
             startInfo.ArgumentList.Add(temporaryRoot);
-            Process.Start(startInfo)?.Dispose();
+            using var installer = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("The verified update installer could not be started.");
         }
         catch
         {
@@ -153,8 +154,8 @@ internal sealed partial class UpdateInstaller
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
-        var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var error = process.StandardError.ReadToEndAsync(cancellationToken);
+        var output = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        var error = process.StandardError.ReadToEndAsync(CancellationToken.None);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
         try
@@ -162,10 +163,12 @@ internal sealed partial class UpdateInstaller
             await process.WaitForExitAsync(deadline.Token);
             return (await output, await error);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
             await process.WaitForExitAsync(CancellationToken.None);
+            await Task.WhenAll(output, error);
+            cancellationToken.ThrowIfCancellationRequested();
             throw new TimeoutException("The downloaded executable did not complete version validation.");
         }
     }

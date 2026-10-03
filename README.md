@@ -45,7 +45,8 @@ The first sample establishes a baseline; recorded traffic appears after the next
 
 Download the x64 or ARM64 ZIP from GitHub Releases, extract it, and run `install.cmd`. The installer
 needs no administrator privileges, adds `octetledger` to the user PATH, and starts an invisible
-collector every 60 seconds through the current user's Windows startup configuration.
+collector every 60 seconds. A hidden per-user Windows scheduled task checks the collector every minute
+and at logon, independently of its startup launcher.
 
 Once the WinGet package is accepted, these commands will also work:
 
@@ -149,6 +150,13 @@ while the last success is still recent. The status includes consecutive errors a
 log. Process control records the PID, process start time, and executable path, so another
 `octetledger` command cannot be stopped as if it were the collector.
 
+The watchdog restarts a missing collector, recreates a missing launcher, and replaces a worker that
+has not completed a successful collection for more than three minutes. A newly started worker gets
+the same three-minute startup grace period. The exclusive collector lock is released by Windows even
+after a forced process termination and is scoped to the data directory. `collector stop` persists
+across watchdog checks and logon; only `collector start` or `collector install` clears that deliberate
+stop. The last successful collection timestamp remains visible after stopping.
+
 Stored traffic is attributed to the time at which the counter difference is observed. OctetLedger
 also stores the real elapsed time since the preceding observation. `Peak avg` is therefore the
 highest average over an observed interval, not an instantaneous packet-level peak. Reports warn
@@ -162,13 +170,20 @@ missing option values, and extraneous arguments return exit code 2.
 
 Monthly budgets report current usage, remaining capacity, 75/90/100-percent warnings, and a
 projection based on elapsed days. `compare` reports period-over-period change and a month-end
-projection. `database retention` preserves older totals in daily aggregates before removing raw
-minute rows; `database vacuum` reclaims SQLite space.
+projection. `database retention` preserves older totals in local-calendar daily aggregates before
+removing raw minute rows; `database vacuum` reclaims SQLite space. Hourly reports use only retained
+raw minutes: a daily archive cannot recover individual hours. Archives made by older versions used
+UTC dates and cannot be split back into exact local days after their raw minutes have been removed.
 
 `dashboard` serves a read-only dashboard on `http://127.0.0.1:8765` and never binds to a network
 interface. `--data-dir` selects an isolated database and settings directory for portable use.
 Portable data directories deliberately do not control the registered per-user collector: use
 explicit `collect` calls or keep `monitor` running with the same `--data-dir`.
+On Windows, the default data root honors a nonempty `LOCALAPPDATA` environment variable; registered
+launcher and watchdog scripts retain the root used at installation. Settings updates are serialized
+and written atomically so concurrent commands do not overwrite unrelated preferences.
+An existing malformed settings file is reported as an error and is never silently replaced with
+default preferences by a settings mutation.
 
 Per-application tracking is opt-in. `apps monitor` uses Windows kernel ETW process, TCP/IP, and
 UDP/IP events and therefore requires an Administrator terminal. It stores hourly estimated payload

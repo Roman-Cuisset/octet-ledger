@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace OctetLedger.Core;
@@ -17,29 +19,61 @@ public sealed record OctetLedgerSettings(
 
     public static string SettingsPath => AppDataPaths.SettingsPath;
 
-    public static OctetLedgerSettings Load()
+    public static OctetLedgerSettings Load() => Load(SettingsPath);
+
+    internal static OctetLedgerSettings Load(string settingsPath)
     {
-        if (!File.Exists(SettingsPath))
+        if (!File.Exists(settingsPath))
         {
             return new OctetLedgerSettings();
         }
 
         try
         {
-            return JsonSerializer.Deserialize<OctetLedgerSettings>(File.ReadAllText(SettingsPath), JsonOptions)
-                   ?? new OctetLedgerSettings();
+            return JsonSerializer.Deserialize<OctetLedgerSettings>(File.ReadAllText(settingsPath), JsonOptions)
+                   ?? throw new InvalidDataException($"Settings file '{settingsPath}' does not contain settings.");
         }
-        catch (JsonException)
+        catch (JsonException exception)
         {
-            return new OctetLedgerSettings();
+            throw new InvalidDataException($"Settings file '{settingsPath}' contains invalid JSON.", exception);
         }
     }
 
-    public void Save()
+    public static OctetLedgerSettings Update(Func<OctetLedgerSettings, OctetLedgerSettings> update) => Update(SettingsPath, update);
+
+    internal static OctetLedgerSettings Update(string settingsPath, Func<OctetLedgerSettings, OctetLedgerSettings> update)
     {
-        Directory.CreateDirectory(AppDataPaths.DataDirectory);
-        var temporaryPath = $"{SettingsPath}.tmp";
-        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(this, JsonOptions));
-        File.Move(temporaryPath, SettingsPath, overwrite: true);
+        var path = Path.GetFullPath(settingsPath);
+        if (OperatingSystem.IsWindows()) path = path.ToUpperInvariant();
+        var lockId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(path)));
+        using var mutex = new Mutex(false, $"OctetLedger.Settings.{lockId}");
+        try { mutex.WaitOne(); }
+        catch (AbandonedMutexException) { }
+        try
+        {
+            var settings = update(Load(settingsPath));
+            settings.Save(settingsPath);
+            return settings;
+        }
+        finally
+        {
+            mutex.ReleaseMutex();
+        }
+    }
+
+    private void Save(string settingsPath)
+    {
+        var directory = Path.GetDirectoryName(settingsPath);
+        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+        var temporaryPath = $"{settingsPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(this, JsonOptions));
+            File.Move(temporaryPath, settingsPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+        }
     }
 }

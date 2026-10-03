@@ -31,9 +31,9 @@ public static class TrafficReport
     public static IReadOnlyList<TrafficReportRow> Hourly(IEnumerable<TrafficBucket> buckets)
     {
         return Build(
-            buckets,
+            buckets.Where(bucket => !bucket.IsDailyArchive),
             bucket => bucket.MinuteUtc.ToLocalTime().ToString("yyyy-MM-dd HH:00 zzz", CultureInfo.InvariantCulture),
-            _ => 3600);
+            group => SecondsForHour(group.First().MinuteUtc.ToLocalTime(), DateTimeOffset.UtcNow));
     }
 
     public static IReadOnlyList<TrafficReportRow> Daily(IEnumerable<TrafficBucket> buckets)
@@ -125,9 +125,12 @@ public static class TrafficReport
 
         var physical = values.Where(row => NetworkInterfaceSelector.IsLikelyPhysical(
             row.InterfaceName, row.InterfaceDescription, row.InterfaceType)).ToArray();
-        return physical.Length > 0
-            ? physical
-            : [values.OrderByDescending(row => row.TotalBytes).First()];
+        if (physical.Length > 0) return physical;
+
+        var fallbackId = values.GroupBy(row => row.InterfaceId)
+            .OrderByDescending(group => group.Sum(row => row.TotalBytes))
+            .First().Key;
+        return values.Where(row => string.Equals(row.InterfaceId, fallbackId, StringComparison.OrdinalIgnoreCase)).ToArray();
     }
 
     private static TrafficReportRow[] Build(
@@ -168,6 +171,15 @@ public static class TrafficReport
         return date.AddDays(-daysSinceMonday);
     }
 
+    internal static double SecondsForHour(DateTimeOffset localMinute, DateTimeOffset nowUtc)
+    {
+        var start = new DateTimeOffset(localMinute.Year, localMinute.Month, localMinute.Day,
+            localMinute.Hour, 0, 0, localMinute.Offset);
+        var end = start.AddHours(1);
+        var effectiveEnd = end < nowUtc ? end : nowUtc;
+        return Math.Max(1, (effectiveEnd - start).TotalSeconds);
+    }
+
     private static double SecondsForDay(DateTime day)
     {
         return SecondsForRange(day, 1);
@@ -180,11 +192,9 @@ public static class TrafficReport
 
     internal static double SecondsForRange(DateTime start, int days, TimeZoneInfo timeZone, DateTimeOffset nowUtc)
     {
-        var localStart = DateTime.SpecifyKind(start, DateTimeKind.Unspecified);
-        var localEnd = DateTime.SpecifyKind(start.AddDays(days), DateTimeKind.Unspecified);
-        var startUtc = TimeZoneInfo.ConvertTimeToUtc(localStart, timeZone);
-        var endUtc = TimeZoneInfo.ConvertTimeToUtc(localEnd, timeZone);
-        var effectiveEnd = endUtc < nowUtc.UtcDateTime ? endUtc : nowUtc.UtcDateTime;
+        var startUtc = CalendarPeriods.StartOfDayUtc(start, timeZone);
+        var endUtc = CalendarPeriods.StartOfDayUtc(start.AddDays(days), timeZone);
+        var effectiveEnd = endUtc < nowUtc ? endUtc : nowUtc;
         return Math.Max(1, (effectiveEnd - startUtc).TotalSeconds);
     }
 }

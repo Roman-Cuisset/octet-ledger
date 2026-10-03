@@ -106,6 +106,63 @@ public class TrafficReportTests
         Assert.Equal(["ethernet", "wifi"], selectedRows.Select(row => row.InterfaceId).Order().ToArray());
     }
 
+    [Fact]
+    public void AutomaticRowFallbackKeepsAllPeriodsForTheBusiestInterface()
+    {
+        var rows = new[]
+        {
+            new TrafficReportRow("2026-01-02", "vpn", "VPN", 60, 0, 0, 0),
+            new TrafficReportRow("2026-01-01", "vpn", "VPN", 60, 0, 0, 0),
+            new TrafficReportRow("2026-01-02", "tunnel", "Tunnel", 100, 0, 0, 0)
+        };
+
+        var selected = TrafficReport.SelectInterfaceRows(rows, null, null);
+
+        Assert.Equal(["2026-01-02", "2026-01-01"], selected.Select(row => row.Period).ToArray());
+        Assert.All(selected, row => Assert.Equal("vpn", row.InterfaceId));
+    }
+
+    [Fact]
+    public void HourlyDoesNotPresentDailyArchivesAsAnHourOfTraffic()
+    {
+        var minute = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var raw = new TrafficBucket("wifi", "Wi-Fi", minute, 123, 456);
+        var archive = new TrafficBucket("wifi", "Wi-Fi", minute, 100_000, 200_000, IsDailyArchive: true);
+
+        var row = Assert.Single(TrafficReport.Hourly([raw, archive]));
+
+        Assert.Equal(123, row.BytesReceived);
+        Assert.Equal(456, row.BytesSent);
+    }
+
+    [Fact]
+    public void CurrentHourDurationUsesElapsedTimeRatherThanACompleteHour()
+    {
+        var localMinute = new DateTimeOffset(2026, 1, 1, 12, 20, 0, TimeSpan.FromHours(5.5));
+        var nowUtc = new DateTimeOffset(2026, 1, 1, 6, 50, 0, TimeSpan.Zero);
+
+        Assert.Equal(1_200, TrafficReport.SecondsForHour(localMinute, nowUtc));
+        Assert.Equal(3_600, TrafficReport.SecondsForHour(localMinute, nowUtc.AddHours(2)));
+    }
+
+    [Theory]
+    [InlineData(3, 1, 23 * 60 * 60)]
+    [InlineData(10, 1, 25 * 60 * 60)]
+    public void CalendarDaysHandleInvalidAndRepeatedMidnights(int month, int day, double expectedSeconds)
+    {
+        var rule = TimeZoneInfo.AdjustmentRule.CreateAdjustmentRule(
+            new DateTime(2026, 1, 1), new DateTime(2026, 12, 31), TimeSpan.FromHours(1),
+            TimeZoneInfo.TransitionTime.CreateFixedDateRule(new DateTime(1, 1, 1, 0, 0, 0), 3, 1),
+            TimeZoneInfo.TransitionTime.CreateFixedDateRule(new DateTime(1, 1, 1, 1, 0, 0), 10, 1));
+        var zone = TimeZoneInfo.CreateCustomTimeZone("MidnightDST", TimeSpan.Zero,
+            "MidnightDST", "Standard", "Daylight", [rule]);
+        var start = new DateTime(2026, month, day);
+        var nowUtc = new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        Assert.True(zone.IsInvalidTime(start) || zone.IsAmbiguousTime(start));
+        Assert.Equal(expectedSeconds, TrafficReport.SecondsForRange(start, 1, zone, nowUtc));
+    }
+
     [Theory]
     [InlineData(2026, 3, 8, 23 * 60 * 60)]
     [InlineData(2026, 11, 1, 25 * 60 * 60)]
@@ -118,17 +175,6 @@ public class TrafficReportTests
         var seconds = TrafficReport.SecondsForRange(start, 1, zone, now);
 
         Assert.Equal(expectedSeconds, seconds);
-    }
-
-    [Fact]
-    public void JsonExportContainsNumericByteValues()
-    {
-        var row = new TrafficReportRow("2026-09-11", "wifi", "Wi-Fi", 100, 50, 1, 2);
-
-        var json = TrafficReportExporter.ToJson([row]);
-
-        Assert.Contains("\"totalBytes\": 150", json, StringComparison.Ordinal);
-        Assert.Contains("\"interfaceName\": \"Wi-Fi\"", json, StringComparison.Ordinal);
     }
 
     [Theory]

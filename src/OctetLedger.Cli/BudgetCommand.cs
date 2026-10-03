@@ -18,11 +18,11 @@ internal static partial class BudgetCommand
                     Console.Error.WriteLine("Budget must be a positive size such as 500GB or 1.5TB.");
                     return 2;
                 }
-                (settings with { MonthlyBudgetBytes = bytes }).Save();
+                OctetLedgerSettings.Update(current => current with { MonthlyBudgetBytes = bytes });
                 Console.WriteLine($"Monthly budget set to {ByteFormatter.Format(bytes)}.");
                 return 0;
             case "remove" when arguments.Length == 1:
-                (settings with { MonthlyBudgetBytes = null }).Save();
+                OctetLedgerSettings.Update(current => current with { MonthlyBudgetBytes = null });
                 Console.WriteLine("Monthly budget removed.");
                 return 0;
             case "status" when arguments.Length == 1 || arguments.Length == 0:
@@ -51,10 +51,9 @@ internal static partial class BudgetCommand
             "TIB" => 1_099_511_627_776m,
             _ => 1m
         };
-        var total = value * multiplier;
-        if (total > long.MaxValue) return false;
-        bytes = decimal.ToInt64(decimal.Round(total));
-        return true;
+        if (value > long.MaxValue / multiplier) return false;
+        bytes = decimal.ToInt64(decimal.Round(value * multiplier));
+        return bytes > 0;
     }
 
     private static int ShowStatus(OctetLedgerSettings settings)

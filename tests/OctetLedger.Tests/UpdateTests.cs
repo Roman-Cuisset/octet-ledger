@@ -169,6 +169,26 @@ public class UpdateTests
         Assert.True(process.HasExited);
     }
 
+    [Fact]
+    public async Task VersionProbeKillsProcessWhenCallerCancels()
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell.exe")
+        {
+            ArgumentList = { "-NoProfile", "-Command", "Start-Sleep -Seconds 30" },
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        })!;
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            UpdateInstaller.ReadProcessOutputAsync(process, TimeSpan.FromSeconds(10), cancellation.Token));
+
+        Assert.True(process.HasExited);
+    }
+
     private sealed class ResponseHandler(HttpContent content) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>

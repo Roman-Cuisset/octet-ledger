@@ -34,6 +34,26 @@ public class NetworkInterfaceSelectorTests
         Assert.Equal("wifi", selected.Id);
     }
 
+    [Fact]
+    public void SelectPrimaryHonorsExplicitVirtualInterfacePreference()
+    {
+        var snapshots = new[]
+        {
+            Snapshot("ethernet", "Ethernet", "Ethernet", 10_000),
+            Snapshot("vpn", "Tailscale", "53", 5_000)
+        };
+
+        Assert.Equal("vpn", NetworkInterfaceSelector.SelectPrimary(snapshots, "vpn")?.Id);
+    }
+
+    [Fact]
+    public void SelectPrimaryIncludesAnActiveAdapterBeforeItsFirstByte()
+    {
+        var snapshot = Snapshot("wifi", "Wi-Fi", "Wireless80211", 0) with { BytesSent = 0 };
+
+        Assert.Equal("wifi", NetworkInterfaceSelector.SelectPrimary([snapshot])?.Id);
+    }
+
     private static NetworkInterfaceSnapshot Snapshot(string id, string name, string type, long received)
     {
         return new NetworkInterfaceSnapshot(

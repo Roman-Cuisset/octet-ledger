@@ -10,7 +10,8 @@ public sealed record TrafficBucket(
     double? PeakBytesPerSecond = null,
     double? LongestIntervalSeconds = null,
     string InterfaceDescription = "",
-    string InterfaceType = "");
+    string InterfaceType = "",
+    bool IsDailyArchive = false);
 
 public sealed record CollectionResult(
     int InterfacesObserved,

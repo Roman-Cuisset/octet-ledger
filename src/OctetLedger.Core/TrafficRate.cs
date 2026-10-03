@@ -15,13 +15,15 @@ public static class TrafficRateCalculator
         }
 
         var elapsedSeconds = (current.CapturedAt - previous.CapturedAt).TotalSeconds;
-        if (elapsedSeconds <= 0)
+        if (elapsedSeconds <= 0 ||
+            current.BytesReceived < previous.BytesReceived ||
+            current.BytesSent < previous.BytesSent)
         {
             return new TrafficRate(0, 0);
         }
 
-        var receivedDelta = Math.Max(0, current.BytesReceived - previous.BytesReceived);
-        var sentDelta = Math.Max(0, current.BytesSent - previous.BytesSent);
+        var receivedDelta = current.BytesReceived - previous.BytesReceived;
+        var sentDelta = current.BytesSent - previous.BytesSent;
 
         return new TrafficRate(receivedDelta / elapsedSeconds, sentDelta / elapsedSeconds);
     }
