@@ -258,12 +258,11 @@ removes the temporary certificate. Without those secrets, releases remain explic
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://signpath.io), certificate by
-[SignPath Foundation](https://signpath.org).
+OctetLedger releases are currently **unsigned**. The application for free code signing through
+[SignPath Foundation](https://signpath.org) was not accepted because the project is not yet
+sufficiently well known. No code-signing certificate has been obtained through that program.
 
-Committers and reviewers: <https://github.com/Roman-Cuisset/octet-ledger>
-
-Approvers: <https://github.com/Roman-Cuisset/octet-ledger/graphs/contributors>
+Windows may display SmartScreen warnings when downloading or running the unsigned executables.
 
 This program will not transfer information to other networked systems unless specifically requested
 by the user or the person installing or operating it.
