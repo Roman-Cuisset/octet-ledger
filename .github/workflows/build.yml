@@ -52,9 +52,18 @@ jobs:
         shell: pwsh
         run: .\scripts\package.ps1 -Version ci
 
-      - name: Test install, update, rollback, and crash recovery
+      - name: Test complete native installation lifecycle
+        timeout-minutes: 15
         shell: pwsh
-        run: .\scripts\test-install-lifecycle.ps1 -PackagePath .\artifacts\packages\OctetLedger-ci-win-x64.zip
+        run: .\scripts\test-install-lifecycle.ps1 -PackagePath .\artifacts\packages\OctetLedger-ci-win-x64.zip -EvidencePath .\artifacts\validation\lifecycle-win-x64.json
+
+      - name: Retain lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lifecycle-win-x64
+          path: artifacts/validation/*
+          if-no-files-found: error
 
   arm64:
     runs-on: windows-11-arm
@@ -90,3 +99,16 @@ jobs:
       - name: Build ARM64 installation package
         shell: pwsh
         run: .\scripts\package.ps1 -Version ci -Runtime win-arm64
+
+      - name: Test complete native ARM64 installation lifecycle
+        timeout-minutes: 15
+        shell: pwsh
+        run: .\scripts\test-install-lifecycle.ps1 -PackagePath .\artifacts\packages\OctetLedger-ci-win-arm64.zip -EvidencePath .\artifacts\validation\lifecycle-win-arm64.json
+
+      - name: Retain lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lifecycle-win-arm64
+          path: artifacts/validation/*
+          if-no-files-found: error

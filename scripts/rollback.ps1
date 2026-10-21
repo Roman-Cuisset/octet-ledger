@@ -24,6 +24,13 @@ $previousVersion = & $previousExecutable version 2>&1
 if ($LASTEXITCODE -ne 0 -or ($previousVersion -join "`n") -notmatch '^OctetLedger\s+') {
     throw 'The previous executable failed validation. The current installation was not changed.'
 }
+$databasePath = Join-Path $env:LOCALAPPDATA 'OctetLedger\octetledger.db'
+if (Test-Path -LiteralPath $databasePath) {
+    $compatibility = & $previousExecutable database check $databasePath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "The previous executable cannot read the current database. The current installation was not changed. Restore a matching database backup explicitly before downgrading. $($compatibility -join ' ')"
+    }
+}
 $replacementMade = $false
 try {
     & $installedExecutable collector stop 2>$null | Out-Null
