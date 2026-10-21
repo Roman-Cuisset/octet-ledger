@@ -324,8 +324,16 @@ public static class OctetLedgerLifecycleNative {
     if ($remainingWorkers.Count -ne 0 -or $remainingLaunchers.Count -ne 0) {
         throw 'Uninstall retained an isolated collector or launcher process.'
     }
-    & schtasks.exe /Query /TN $watchdogTaskName 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) { throw 'Uninstall retained its independent watchdog task.' }
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        & schtasks.exe /Query /TN $watchdogTaskName 2>$null | Out-Null
+        $taskExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($taskExitCode -eq 0) { throw 'Uninstall retained its independent watchdog task.' }
     $startup = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
     if ($null -ne $startup -and $null -ne $startup.PSObject.Properties[$startupValueName]) {
         throw 'Uninstall retained its startup registry value.'
@@ -366,7 +374,10 @@ finally {
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($watchdogTaskName)) {
-        try { & schtasks.exe /Delete /TN $watchdogTaskName /F 2>$null | Out-Null } catch {}
+        & schtasks.exe /Query /TN $watchdogTaskName 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            & schtasks.exe /Delete /TN $watchdogTaskName /F 2>$null | Out-Null
+        }
     }
     if (-not [string]::IsNullOrWhiteSpace($startupValueName)) {
         Remove-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name $startupValueName -ErrorAction SilentlyContinue
@@ -387,4 +398,12 @@ finally {
         New-Item -ItemType Directory -Path (Split-Path -Parent $resolvedEvidence) -Force | Out-Null
         $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $resolvedEvidence -Encoding utf8
     }
+    if ($evidence.status -eq 'pass') {
+        $global:LASTEXITCODE = 0
+    }
+}
+if ($evidence.status -eq 'pass') {
+    exit 0
+} else {
+    exit 1
 }
