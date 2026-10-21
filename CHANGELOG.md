@@ -1,6 +1,27 @@
 # Changelog
 
 
+## Unreleased
+
+### Visibility and collection health
+
+- Add `octetledger history` subcommand displaying next expected collection time, tracking start, raw observation detail boundaries, and interruption records with factual reason codes.
+- Distinguish measured zero traffic from unobserved intervals and post-interruption traffic volume across CLI reports and the web dashboard.
+- Expose explicit `Precision` (`counter intervals`, `daily archives`, `mixed`) on report rows, JSON, and CSV exports.
+- Redesign the web dashboard with collection health indicators, striped bars for unmeasured intervals, and a dedicated interruptions timeline.
+
+### Bounded logging and local diagnostics
+
+- Centralize bounded structured JSON logging (`collector.log` <= 8 KiB active with repeat deduplication, rotating across `.log.1`, `.log.2`, `.log.3`).
+- Route launcher errors through native `collector log` command to keep all log writers strictly bounded.
+- Add `octetledger diagnostics preview` and `octetledger diagnostics export <path>` for privacy-safe local support reports without network transmission or private identifiers.
+
+### Release gates and transition validation
+
+- Gate releases on real native installation lifecycle validation on GitHub Actions runners before packaging artifacts.
+- Add safe Windows transition testing (`scripts/test-windows-transition.ps1`) with two-phase `--prepare` / `--verify` across Wi-Fi/Ethernet, VPN, sleep, and reboot.
+- Add local IPv6 ETW monitoring probe (`scripts/test-windows-ipv6.ps1`) and automated deterministic network transition tests.
+
 ## 0.7.1
 
 ### Collector reliability

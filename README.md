@@ -100,6 +100,10 @@ octetledger top --days 10
 octetledger daily --json
 octetledger monthly --csv report.csv
 octetledger daily --all                  # Explicitly include every interface
+octetledger history                      # Collector-wide observations, interruptions, known events
+octetledger history --days 14
+octetledger diagnostics preview          # Privacy-safe local diagnostic report
+octetledger diagnostics export diag.json # Export report without sending data over network
 
 octetledger collector status
 octetledger collector install
@@ -156,6 +160,16 @@ the same three-minute startup grace period. The exclusive collector lock is rele
 after a forced process termination and is scoped to the data directory. `collector stop` persists
 across watchdog checks and logon; only `collector start` or `collector install` clears that deliberate
 stop. The last successful collection timestamp remains visible after stopping.
+
+### Observation coverage and interruptions
+
+OctetLedger explicitly records each collector observation frame, measured intervals, and valid zero-byte
+intervals. An interruption is detected when no collection occurs for more than 90 seconds. OctetLedger
+reports factual interruption periods with reason codes (`unknown_collection_gap`, `no_active_interfaces`,
+`interface_not_up`, `counter_reset`, etc.). Unobserved time is never reported as zero traffic.
+Each report row exposes its measurement precision (`counter intervals`, `daily archives`, or `mixed`).
+`octetledger history` shows the collector-wide observation timeline, while the web dashboard displays
+a collection health summary, interruptions timeline, and striped bars for unmeasured intervals.
 
 Stored traffic is attributed to the time at which the counter difference is observed. OctetLedger
 also stores the real elapsed time since the preceding observation. `Peak avg` is therefore the
