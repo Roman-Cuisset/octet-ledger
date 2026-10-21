@@ -135,6 +135,7 @@ octetledger update rollback
 octetledger update status
 octetledger update disable
 octetledger daily --data-dir .\portable-data
+```
 
 Stored reports include every physical Wi-Fi/Ethernet interface by default, so switching from Wi-Fi
 to Ethernet does not hide earlier traffic. VPN and virtual adapters are excluded to avoid duplicate
