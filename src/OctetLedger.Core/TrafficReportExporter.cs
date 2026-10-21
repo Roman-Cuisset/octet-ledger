@@ -20,7 +20,8 @@ public static class TrafficReportExporter
             totalBytes = row.TotalBytes,
             averageBytesPerSecond = Math.Round(row.AverageBytesPerSecond, 2),
             peakBytesPerSecond = Math.Round(row.PeakBytesPerSecond, 2),
-            longestIntervalSeconds = Math.Round(row.LongestIntervalSeconds, 2)
+            longestIntervalSeconds = Math.Round(row.LongestIntervalSeconds, 2),
+            precision = row.Precision
         });
 
         return JsonSerializer.Serialize(values, JsonOptions);
@@ -41,7 +42,7 @@ public static class TrafficReportExporter
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
         writer.WriteLine(
             "Period,InterfaceId,InterfaceName,BytesReceived,BytesSent,TotalBytes," +
-            "AverageBytesPerSecond,PeakBytesPerSecond,LongestIntervalSeconds");
+            "AverageBytesPerSecond,PeakBytesPerSecond,LongestIntervalSeconds,Precision");
 
         foreach (var row in rows)
         {
@@ -54,7 +55,8 @@ public static class TrafficReportExporter
                 row.TotalBytes.ToString(CultureInfo.InvariantCulture),
                 row.AverageBytesPerSecond.ToString("0.00", CultureInfo.InvariantCulture),
                 row.PeakBytesPerSecond.ToString("0.00", CultureInfo.InvariantCulture),
-                row.LongestIntervalSeconds.ToString("0.00", CultureInfo.InvariantCulture)));
+                row.LongestIntervalSeconds.ToString("0.00", CultureInfo.InvariantCulture),
+                EscapeCsv(NeutralizeSpreadsheetFormula(row.Precision))));
         }
     }
 

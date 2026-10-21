@@ -5,21 +5,29 @@ namespace OctetLedger.Core;
 
 internal static class TrafficDatabaseSchema
 {
-    internal const int CurrentVersion = 5;
+    internal const int CurrentVersion = 6;
     private const int ApplicationId = 0x4F4C4447; // OLDG
     private static readonly string[] KnownTables =
     [
         "adapter_state",
         "application_traffic_hour",
         "traffic_archive_day",
-        "traffic_minute"
+        "traffic_minute",
+        "collection_state",
+        "collection_sample",
+        "collection_gap",
+        "collection_archive_day"
     ];
     private static readonly (string Name, string[] Columns, string[] PrimaryKey)[] RequiredSchema =
     [
         ("adapter_state", ["interface_id", "name", "description", "type", "last_received", "last_sent", "last_seen_utc"], ["interface_id"]),
         ("traffic_minute", ["interface_id", "minute_utc", "bytes_received", "bytes_sent"], ["interface_id", "minute_utc"]),
         ("traffic_archive_day", ["interface_id", "day_utc", "bytes_received", "bytes_sent", "interval_seconds", "peak_bytes_per_second", "longest_interval_seconds"], ["interface_id", "day_utc"]),
-        ("application_traffic_hour", ["process_name", "hour_utc", "bytes_received", "bytes_sent"], ["process_name", "hour_utc"])
+        ("application_traffic_hour", ["process_name", "hour_utc", "bytes_received", "bytes_sent"], ["process_name", "hour_utc"]),
+        ("collection_state", ["id", "tracking_started_utc", "last_success_utc", "raw_history_from_utc"], ["id"]),
+        ("collection_sample", ["id", "captured_utc", "measured_intervals", "zero_intervals", "no_active_interfaces"], ["id"]),
+        ("collection_gap", ["id", "start_utc", "end_utc", "reason", "interface_id", "interface_name"], ["id"]),
+        ("collection_archive_day", ["day_utc", "observations", "measured_intervals", "zero_intervals", "no_active_observations"], ["day_utc"])
     ];
     private static readonly string[] MinuteStatisticsColumns =
         ["interval_seconds", "peak_bytes_per_second", "longest_interval_seconds"];
@@ -104,6 +112,37 @@ internal static class TrafficDatabaseSchema
 
                 CREATE INDEX IF NOT EXISTS ix_application_traffic_hour_time
                     ON application_traffic_hour(hour_utc);
+
+                CREATE TABLE IF NOT EXISTS collection_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    tracking_started_utc TEXT NOT NULL,
+                    last_success_utc TEXT NOT NULL,
+                    raw_history_from_utc TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS collection_sample (
+                    id INTEGER PRIMARY KEY,
+                    captured_utc TEXT NOT NULL,
+                    measured_intervals INTEGER NOT NULL,
+                    zero_intervals INTEGER NOT NULL,
+                    no_active_interfaces INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_collection_sample_time ON collection_sample(captured_utc);
+                CREATE TABLE IF NOT EXISTS collection_gap (
+                    id INTEGER PRIMARY KEY,
+                    start_utc TEXT NOT NULL,
+                    end_utc TEXT,
+                    reason TEXT NOT NULL,
+                    interface_id TEXT,
+                    interface_name TEXT
+                );
+                CREATE INDEX IF NOT EXISTS ix_collection_gap_time ON collection_gap(start_utc, end_utc);
+                CREATE TABLE IF NOT EXISTS collection_archive_day (
+                    day_utc TEXT PRIMARY KEY,
+                    observations INTEGER NOT NULL,
+                    measured_intervals INTEGER NOT NULL,
+                    zero_intervals INTEGER NOT NULL,
+                    no_active_observations INTEGER NOT NULL
+                );
                 """;
             schema.ExecuteNonQuery();
         }
@@ -124,6 +163,8 @@ internal static class TrafficDatabaseSchema
         {
             Execute(connection, transaction, "UPDATE traffic_minute SET longest_interval_seconds = interval_seconds;");
         }
+        AddColumnIfMissing(connection, transaction, "adapter_state", "last_observed_active",
+            "ALTER TABLE adapter_state ADD COLUMN last_observed_active INTEGER NOT NULL DEFAULT 0;");
 
         Execute(connection, transaction, $"PRAGMA application_id = {ApplicationId}; PRAGMA user_version = {CurrentVersion};");
         transaction.Commit();
@@ -210,7 +251,8 @@ internal static class TrafficDatabaseSchema
                 if (position > 0) primaryKey.Add(position, name);
             }
             if (table.Columns.Any(column => !columns.Contains(column)) ||
-                table.Name == "traffic_minute" && version == CurrentVersion &&
+                table.Name == "adapter_state" && version == CurrentVersion && !columns.Contains("last_observed_active") ||
+                table.Name == "traffic_minute" && version >= 5 &&
                 MinuteStatisticsColumns.Any(column => !columns.Contains(column)))
                 return $"The OctetLedger table '{table.Name}' is missing required columns.";
             if (!primaryKey.Values.SequenceEqual(table.PrimaryKey, StringComparer.OrdinalIgnoreCase))

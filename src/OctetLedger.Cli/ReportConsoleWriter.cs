@@ -8,6 +8,7 @@ internal static class ReportConsoleWriter
         IReadOnlyList<TrafficReportRow> rows,
         string scope,
         CollectorTaskStatus collector,
+        CollectionHistory history,
         TextWriter output,
         TextWriter error,
         bool showAllInterfaces = false)
@@ -18,14 +19,31 @@ internal static class ReportConsoleWriter
         var interfaces = rows.Select(row => row.InterfaceName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (interfaces.Length > 1)
             output.WriteLine($"Interfaces: {string.Join(", ", interfaces)}");
+        var precision = rows.Select(row => CollectionDisplay.Precision(row.Precision)).Distinct(StringComparer.Ordinal);
+        output.WriteLine($"Precision: {(rows.Count == 0 ? "no traffic measurement in this scope" : string.Join(", ", precision))}.");
+        output.WriteLine("Counter intervals are stored in minute buckets; a long interval is not minute-by-minute precision.");
+        output.WriteLine($"Collection-wide detail from {CollectionDisplay.Timestamp(history.RawHistoryFromUtc)}; earlier coverage is unknown.");
+        output.WriteLine($"Collection observations: {history.Days.Sum(day => day.Observations)}; " +
+                         $"measured zero intervals: {history.Days.Sum(day => day.ZeroTrafficIntervals)}; " +
+                         $"no active interface observations: {history.Days.Sum(day => day.NoActiveInterfaceObservations)}.");
+        var nextExpected = CollectionDisplay.NextExpectedUtc(collector, history.LastSuccessUtc);
+        output.WriteLine($"Next expected: {(nextExpected is null ? "not scheduled / first success pending" : CollectionDisplay.Timestamp(nextExpected))}.");
+        if (history.Gaps.Count > 0)
+        {
+            output.WriteLine($"Collection history contains {history.Gaps.Count} interruption/unknown-coverage interval(s).");
+            foreach (var gap in history.Gaps.TakeLast(5))
+                output.WriteLine($"  {CollectionDisplay.Timestamp(gap.StartUtc)} -> {(gap.EndUtc is null ? "ongoing" : CollectionDisplay.Timestamp(gap.EndUtc))}: {CollectionDisplay.Reason(gap.Reason)}");
+            output.WriteLine("Showing at most the latest five intervals; use 'octetledger history --days N' for the full requested timeline.");
+        }
         output.WriteLine();
-        output.WriteLine($"{"Period",16} {"Interface",-24} {"Received",12} {"Sent",12} {"Total",12} {"Average",14} {"Peak avg",14}");
-        output.WriteLine(new string('-', 112));
+        output.WriteLine($"{"Period",16} {"Interface",-24} {"Received",12} {"Sent",12} {"Total",12} {"Average",14} {"Peak avg",14}  Precision");
+        output.WriteLine(new string('-', 140));
         foreach (var row in rows)
         {
             output.WriteLine($"{row.Period,16} {Trim(row.InterfaceName, 24),-24} {ByteFormatter.Format(row.BytesReceived),12} " +
                              $"{ByteFormatter.Format(row.BytesSent),12} {ByteFormatter.Format(row.TotalBytes),12} " +
-                             $"{ByteFormatter.FormatRate(row.AverageBytesPerSecond),14} {ByteFormatter.FormatRate(row.PeakBytesPerSecond),14}");
+                             $"{ByteFormatter.FormatRate(row.AverageBytesPerSecond),14} {ByteFormatter.FormatRate(row.PeakBytesPerSecond),14}  " +
+                             $"{CollectionDisplay.Precision(row.Precision)}{(row.LongestIntervalSeconds > OctetLedgerDefaults.LongObservationWarningSeconds ? " / long interval" : "")}");
         }
 
         if (rows.Count == 0)

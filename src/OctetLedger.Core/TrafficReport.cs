@@ -12,7 +12,8 @@ public sealed record TrafficReportRow(
     double PeakBytesPerSecond,
     double LongestIntervalSeconds = 60,
     string InterfaceDescription = "",
-    string InterfaceType = "")
+    string InterfaceType = "",
+    string Precision = "raw_intervals")
 {
     public long TotalBytes => BytesReceived + BytesSent;
 }
@@ -158,7 +159,10 @@ public static class TrafficReport
                     peak,
                     group.Max(bucket => bucket.LongestIntervalSeconds ?? bucket.IntervalSeconds),
                     first.InterfaceDescription,
-                    first.InterfaceType);
+                    first.InterfaceType,
+                    group.Any(bucket => bucket.IsDailyArchive)
+                        ? group.Any(bucket => !bucket.IsDailyArchive) ? "mixed" : "daily_archives"
+                        : "raw_intervals");
             })
             .OrderByDescending(row => row.Period, StringComparer.Ordinal)
             .ThenBy(row => row.InterfaceName, StringComparer.OrdinalIgnoreCase)

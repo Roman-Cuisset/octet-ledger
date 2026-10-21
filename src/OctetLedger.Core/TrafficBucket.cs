@@ -11,7 +11,10 @@ public sealed record TrafficBucket(
     double? LongestIntervalSeconds = null,
     string InterfaceDescription = "",
     string InterfaceType = "",
-    bool IsDailyArchive = false);
+    bool IsDailyArchive = false)
+{
+    public string Precision => IsDailyArchive ? "daily_archives" : "raw_intervals";
+}
 
 public sealed record CollectionResult(
     int InterfacesObserved,

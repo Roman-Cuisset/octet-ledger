@@ -206,6 +206,52 @@ public class TrafficReportTests
         }
     }
 
+    [Fact]
+    public void PrecisionDistinguishesRawArchivesAndMixedRowsWithoutChangingTotals()
+    {
+        var minute = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var raw = new TrafficBucket("wifi", "Wi-Fi", minute, 100, 50, LongestIntervalSeconds: 600);
+        var archive = new TrafficBucket("wifi", "Wi-Fi", minute, 200, 100, IsDailyArchive: true);
+
+        Assert.Equal("raw_intervals", Assert.Single(TrafficReport.Daily([raw])).Precision);
+        Assert.Equal("daily_archives", Assert.Single(TrafficReport.Daily([archive])).Precision);
+        var mixed = Assert.Single(TrafficReport.Daily([raw, archive]));
+        Assert.Equal("mixed", mixed.Precision);
+        Assert.Equal(450, mixed.TotalBytes);
+        Assert.Equal(600, mixed.LongestIntervalSeconds);
+        Assert.Equal("raw_intervals", Assert.Single(TrafficReport.Hourly([raw, archive])).Precision);
+    }
+
+    [Theory]
+    [InlineData("raw_intervals")]
+    [InlineData("daily_archives")]
+    [InlineData("mixed")]
+    public void JsonAndCsvExposePrecisionAlongsideUnmodifiedByteTotals(string precision)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "report.csv");
+        try
+        {
+            var row = new TrafficReportRow("all-time", "wifi", "Wi-Fi", 100, 50, 1, 2,
+                LongestIntervalSeconds: 600, Precision: precision);
+            using var json = System.Text.Json.JsonDocument.Parse(TrafficReportExporter.ToJson([row]));
+            var value = json.RootElement[0];
+            Assert.Equal(precision, value.GetProperty("precision").GetString());
+            Assert.Equal(150, value.GetProperty("totalBytes").GetInt64());
+            Assert.Equal(600, value.GetProperty("longestIntervalSeconds").GetDouble());
+
+            TrafficReportExporter.WriteCsv(path, [row]);
+            var lines = File.ReadAllLines(path);
+            Assert.EndsWith(",Precision", lines[0], StringComparison.Ordinal);
+            Assert.EndsWith($",\"{precision}\"", lines[1], StringComparison.Ordinal);
+            Assert.Contains(",100,50,150,", lines[1], StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static TrafficBucket Bucket(
         string interfaceId,
         string interfaceName,

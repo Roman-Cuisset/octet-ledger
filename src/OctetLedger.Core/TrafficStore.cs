@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace OctetLedger.Core;
 
-public sealed class TrafficStore : IDisposable
+public sealed partial class TrafficStore : IDisposable
 {
     public const int CurrentSchemaVersion = TrafficDatabaseSchema.CurrentVersion;
     private readonly SqliteConnection connection;
@@ -38,42 +38,53 @@ public sealed class TrafficStore : IDisposable
 
     public string DatabasePath { get; }
 
-    public CollectionResult Collect(IEnumerable<NetworkInterfaceSnapshot> snapshots)
+    public CollectionResult Collect(IEnumerable<NetworkInterfaceSnapshot> snapshots, DateTimeOffset? capturedAtUtc = null)
     {
-        var observed = snapshots
-            .Where(snapshot => snapshot.Status == "Up" && snapshot.Type != "Loopback")
-            .ToArray();
+        var frame = snapshots.ToArray();
+        var capturedAt = capturedAtUtc ?? (frame.Length == 0 ? DateTimeOffset.UtcNow : frame.Max(snapshot => snapshot.CapturedAt));
+        var observed = frame.Where(snapshot => snapshot.Status == "Up" && snapshot.Type != "Loopback").ToArray();
         var receivedTotal = 0L;
         var sentTotal = 0L;
         var baselines = 0;
+        var measured = 0;
+        var zero = 0;
 
         using var transaction = connection.BeginTransaction();
+        RecordMissingInterfaces(frame, observed, capturedAt, transaction);
         foreach (var snapshot in observed)
         {
+            CloseInterfaceGaps(snapshot.Id, snapshot.CapturedAt, transaction);
             var previous = ReadState(snapshot.Id, transaction);
             if (previous is null)
             {
                 baselines++;
             }
-            else if (snapshot.CapturedAt > previous.Value.LastSeen &&
-                     snapshot.BytesReceived >= previous.Value.Received &&
-                     snapshot.BytesSent >= previous.Value.Sent)
+            else if (snapshot.CapturedAt <= previous.Value.LastSeen)
             {
-                var receivedDelta = snapshot.BytesReceived - previous.Value.Received;
-                var sentDelta = snapshot.BytesSent - previous.Value.Sent;
-                var intervalSeconds = (snapshot.CapturedAt - previous.Value.LastSeen).TotalSeconds;
-                receivedTotal += receivedDelta;
-                sentTotal += sentDelta;
-
-                if (receivedDelta > 0 || sentDelta > 0)
+                RecordGap(snapshot.CapturedAt, previous.Value.LastSeen, "clock_not_advanced", snapshot.Id, snapshot.Name, transaction);
+            }
+            else
+            {
+                var duration = snapshot.CapturedAt - previous.Value.LastSeen;
+                if (snapshot.BytesReceived < previous.Value.Received || snapshot.BytesSent < previous.Value.Sent)
                 {
-                    AddToMinute(snapshot, receivedDelta, sentDelta, intervalSeconds, transaction);
+                    RecordGap(previous.Value.LastSeen, snapshot.CapturedAt, "counter_reset", snapshot.Id, snapshot.Name, transaction);
+                }
+                else
+                {
+                    var receivedDelta = snapshot.BytesReceived - previous.Value.Received;
+                    var sentDelta = snapshot.BytesSent - previous.Value.Sent;
+                    receivedTotal += receivedDelta;
+                    sentTotal += sentDelta;
+                    measured++;
+                    if (receivedDelta == 0 && sentDelta == 0) zero++;
+                    AddToMinute(snapshot, receivedDelta, sentDelta, duration.TotalSeconds, transaction);
                 }
             }
-
             WriteState(snapshot, transaction);
         }
 
+        RecordCollection(capturedAt, observed.Length, measured, zero, transaction);
         transaction.Commit();
         return new CollectionResult(observed.Length, baselines, receivedTotal, sentTotal);
     }
@@ -128,14 +139,16 @@ public sealed class TrafficStore : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = """
             WITH all_traffic AS (
-                SELECT interface_id, minute_utc, bytes_received, bytes_sent, peak_bytes_per_second, longest_interval_seconds FROM traffic_minute
+                SELECT interface_id, minute_utc, bytes_received, bytes_sent, peak_bytes_per_second, longest_interval_seconds, 0 AS archived FROM traffic_minute
                 UNION ALL
-                SELECT interface_id, day_utc, bytes_received, bytes_sent, peak_bytes_per_second, longest_interval_seconds FROM traffic_archive_day
+                SELECT interface_id, day_utc, bytes_received, bytes_sent, peak_bytes_per_second, longest_interval_seconds, 1 AS archived FROM traffic_archive_day
             )
             SELECT b.interface_id, s.name,
                    SUM(b.bytes_received), SUM(b.bytes_sent), MIN(b.minute_utc),
                    MAX(b.peak_bytes_per_second), MAX(b.longest_interval_seconds),
-                   s.description, s.type
+                   s.description, s.type,
+                   CASE WHEN MIN(b.archived) <> MAX(b.archived) THEN 'mixed'
+                        WHEN MAX(b.archived) = 1 THEN 'daily_archives' ELSE 'raw_intervals' END
             FROM all_traffic b
             JOIN adapter_state s ON s.interface_id = b.interface_id
             GROUP BY b.interface_id, s.name, s.description, s.type
@@ -153,7 +166,7 @@ public sealed class TrafficStore : IDisposable
             rows.Add(new TrafficReportRow(
                 "all-time", reader.GetString(0), reader.GetString(1), received, sent,
                 (received + sent) / elapsedSeconds, reader.GetDouble(5), reader.GetDouble(6),
-                reader.GetString(7), reader.GetString(8)));
+                reader.GetString(7), reader.GetString(8), reader.GetString(9)));
         }
         return rows;
     }
@@ -165,7 +178,8 @@ public sealed class TrafficStore : IDisposable
             SELECT
                 (SELECT COUNT(*) FROM adapter_state),
                 (SELECT COUNT(*) FROM traffic_minute),
-                (SELECT MAX(last_seen_utc) FROM adapter_state);
+                COALESCE((SELECT last_success_utc FROM collection_state WHERE id = 1),
+                         (SELECT MAX(last_seen_utc) FROM adapter_state));
             """;
 
         using var reader = command.ExecuteReader();
@@ -340,6 +354,7 @@ public sealed class TrafficStore : IDisposable
         delete.CommandText = "DELETE FROM traffic_minute WHERE minute_utc < $cutoff;";
         delete.Parameters.AddWithValue("$cutoff", FormatTimestamp(cutoff));
         var minutes = delete.ExecuteNonQuery();
+        RetainCollectionHistory(cutoff, transaction);
         transaction.Commit();
         return new RetentionResult(minutes, days);
     }
@@ -382,15 +397,16 @@ public sealed class TrafficStore : IDisposable
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO adapter_state (
-                interface_id, name, description, type, last_received, last_sent, last_seen_utc)
-            VALUES ($id, $name, $description, $type, $received, $sent, $seen)
+                interface_id, name, description, type, last_received, last_sent, last_seen_utc, last_observed_active)
+            VALUES ($id, $name, $description, $type, $received, $sent, $seen, 1)
             ON CONFLICT(interface_id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
                 type = excluded.type,
                 last_received = excluded.last_received,
                 last_sent = excluded.last_sent,
-                last_seen_utc = excluded.last_seen_utc;
+                last_seen_utc = excluded.last_seen_utc,
+                last_observed_active = 1;
             """;
         command.Parameters.AddWithValue("$id", snapshot.Id);
         command.Parameters.AddWithValue("$name", snapshot.Name);

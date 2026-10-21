@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Text.Json;
 using OctetLedger.Core;
 using OctetLedger.Cli;
 using static OctetLedger.Cli.CommandLineArguments;
@@ -56,6 +57,8 @@ try
         "dashboard" => await DashboardCommand.RunAsync(rest),
         "apps" => await ApplicationTrafficCommand.RunAsync(rest),
         "status" => rest.Length == 0 ? ShowStatus() : UnexpectedArguments("status"),
+        "history" => ShowHistory(rest),
+        "diagnostics" => DiagnosticsCommand.RunDiagnostics(GetCurrentVersion(), rest),
         "doctor" => DiagnosticsCommand.RunDoctor(GetCurrentVersion(), rest),
         "help" or "--help" or "-h" => ShowHelp(rest),
         "version" or "--version" => DiagnosticsCommand.ShowVersion(GetCurrentVersion(), rest),
@@ -335,7 +338,7 @@ static int ShowReport(ReportKind kind, string[] arguments)
                     ? "physical interfaces across all recorded history"
                     : totalRows.Count > 0 ? $"historical interface '{totalRows[0].InterfaceName}' across all recorded history" : "all recorded history";
         }
-        return OutputReport(totalRows, arguments, totalScope);
+        return OutputReport(totalRows, arguments, totalScope, store, startUtc, now.ToUniversalTime());
     }
 
     var allBuckets = store.ReadBuckets(startUtc);
@@ -368,10 +371,11 @@ static int ShowReport(ReportKind kind, string[] arguments)
         ReportKind.Monthly => TrafficReport.Monthly(buckets),
         _ => TrafficReport.TopDays(buckets, count.Value)
     };
-    return OutputReport(rows, arguments, scope);
+    return OutputReport(rows, arguments, scope, store, startUtc, now.ToUniversalTime());
 }
 
-static int OutputReport(IReadOnlyList<TrafficReportRow> rows, string[] arguments, string scope)
+static int OutputReport(IReadOnlyList<TrafficReportRow> rows, string[] arguments, string scope,
+    TrafficStore store, DateTimeOffset fromUtc, DateTimeOffset toUtc)
 {
     if (HasFlag(arguments, "--json")) { Console.WriteLine(TrafficReportExporter.ToJson(rows)); return 0; }
     var csvPath = ReadOption(arguments, "--csv");
@@ -381,32 +385,74 @@ static int OutputReport(IReadOnlyList<TrafficReportRow> rows, string[] arguments
         Console.WriteLine($"CSV saved to: {Path.GetFullPath(csvPath)}");
         return 0;
     }
-    PrintReport(rows, scope, HasFlag(arguments, "--all"));
+    PrintReport(rows, scope, store.ReadCollectionHistory(fromUtc, toUtc), HasFlag(arguments, "--all"));
     return 0;
 }
 
-static void PrintReport(IReadOnlyList<TrafficReportRow> rows, string scope, bool showAllInterfaces = false)
+static void PrintReport(IReadOnlyList<TrafficReportRow> rows, string scope, CollectionHistory history, bool showAllInterfaces = false)
 {
     var collector = AppDataPaths.IsPortable
         ? new CollectorTaskStatus(false, "Portable/manual collection")
         : CollectorTaskManager.GetStatus();
-    ReportConsoleWriter.Write(rows, scope, collector, Console.Out, Console.Error, showAllInterfaces);
+    ReportConsoleWriter.Write(rows, scope, collector, history, Console.Out, Console.Error, showAllInterfaces);
 }
 
 
+static int ShowHistory(string[] arguments)
+{
+    if (!ValidateOptions(arguments, ["--json"], ["--days"])) return 2;
+    var days = ReadPositiveInteger(arguments, "--days", 7, 1, 3660);
+    if (days is null) return 2;
+    var now = DateTimeOffset.UtcNow;
+    var from = LocalTimeToUtc(DateTime.Today.AddDays(-(days.Value - 1)));
+    using var store = new TrafficStore();
+    var history = store.ReadCollectionHistory(from, now);
+    var collector = AppDataPaths.IsPortable
+        ? new CollectorTaskStatus(false, "Portable/manual collection")
+        : CollectorTaskManager.GetStatus();
+    var lastSuccessUtc = store.GetStatus().LastCollectionUtc;
+    var nextExpectedUtc = CollectionDisplay.NextExpectedUtc(collector, lastSuccessUtc);
+    var events = CollectorTaskManager.ReadEvents(from, now);
+    if (HasFlag(arguments, "--json"))
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            generatedAt = now,
+            scope = "collector-wide",
+            collectorState = collector.State,
+            lastSuccessUtc,
+            nextExpectedUtc,
+            history,
+            events
+        }, JsonSerializerOptions.Web));
+        return 0;
+    }
+    Console.WriteLine($"Collector: {collector.State}");
+    Console.WriteLine($"Last success: {CollectionDisplay.Timestamp(lastSuccessUtc)}");
+    Console.WriteLine($"Next expected: {(nextExpectedUtc is null ? "not scheduled / first success pending" : CollectionDisplay.Timestamp(nextExpectedUtc))}");
+    CollectionDisplay.WriteHistory(history, Console.Out);
+    Console.WriteLine("Known collector events (bounded recent journal; no event does not establish a cause):");
+    foreach (var entry in events)
+        Console.WriteLine($"  {CollectionDisplay.Timestamp(entry.TimestampUtc)} -> {CollectionDisplay.Timestamp(entry.LastTimestampUtc)}: {entry.Kind} (x{entry.Count})");
+    return 0;
+}
+
 static int ManageCollector(string[] arguments)
 {
-    if (arguments.Length > 1) { Console.Error.WriteLine("Usage: octetledger collector [install|status|start|stop|uninstall]"); return 2; }
+    var action = arguments.FirstOrDefault()?.ToLowerInvariant() ?? "status";
+    if (arguments.Length > 1 && action != "log")
+    { Console.Error.WriteLine("Usage: octetledger collector [install|status|start|stop|uninstall]"); return 2; }
     if (AppDataPaths.IsPortable)
     {
         Console.Error.WriteLine("Collector registration cannot be combined with --data-dir. Use 'octetledger collect --data-dir <directory>' or run 'monitor' in the foreground.");
         return 2;
     }
-    var action = arguments.FirstOrDefault()?.ToLowerInvariant() ?? "status";
     try
     {
         switch (action)
         {
+            case "log":
+                return CollectorTaskManager.RecordLauncherEvent(arguments[1..]);
             case "ensure":
                 CollectorTaskManager.EnsureRunning();
                 return 0;
@@ -550,6 +596,8 @@ static int ShowStatus()
     Console.WriteLine($"  Tracked interfaces {status.TrackedInterfaces}");
     Console.WriteLine($"  Stored minutes     {status.StoredMinutes}");
     Console.WriteLine($"  Last collection    {status.LastCollectionUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "never"}");
+    var nextExpected = CollectionDisplay.NextExpectedUtc(collector, status.LastCollectionUtc);
+    Console.WriteLine($"  Next expected      {(nextExpected is null ? "not scheduled / first success pending" : CollectionDisplay.Timestamp(nextExpected))}");
     Console.WriteLine($"  Default interface  {selected?.Name ?? "none"}");
     Console.WriteLine($"  Saved preference   {settings.PreferredInterfaceId ?? "none (automatic)"}");
     Console.WriteLine($"  Collector          {collector.State}");
@@ -558,6 +606,9 @@ static int ShowStatus()
     Console.WriteLine($"  Database integrity {(store.CheckIntegrity().IsHealthy ? "healthy" : "FAILED")}");
     Console.WriteLine($"  Raw data retention {settings.RetentionRawDays} days");
     Console.WriteLine($"  Automatic backups  {(settings.AutomaticBackups ? "enabled" : "disabled")}");
+    var recentHistory = store.ReadCollectionHistory(LocalTimeToUtc(DateTime.Today.AddDays(-6)), DateTimeOffset.UtcNow);
+    Console.WriteLine($"  Observation detail {CollectionDisplay.Timestamp(recentHistory.RawHistoryFromUtc)} onwards; earlier coverage unknown");
+    Console.WriteLine($"  Gaps / unknown     {recentHistory.Gaps.Count} interval(s) in the last 7 calendar days; see 'octetledger history'");
 
     Console.WriteLine();
     Console.WriteLine("Current Windows interfaces (live counters, not OctetLedger history):");
@@ -621,6 +672,8 @@ static int ShowHelp(string[] arguments)
             Check that collection works:
               octetledger status                Data source, collector health, interfaces
               octetledger doctor                Full installation diagnostics
+              octetledger history               Collection gaps, zero measurements, known events
+              octetledger diagnostics preview   Preview a local privacy-safe support report
 
             First time?
               octetledger collector install      Start automatic collection every minute
@@ -628,7 +681,7 @@ static int ShowHelp(string[] arguments)
 
             More commands:
               total, hourly, weekly, monthly, top, budget, compare
-              interfaces, interface, collector, database, update, apps
+              interfaces, interface, collector, database, update, apps, diagnostics
               Run 'octetledger help <command>' for details.
 
             Key concept: 'summary', 'interfaces', and 'live' show live Windows counters.
@@ -646,6 +699,24 @@ static int ShowHelp(string[] arguments)
 
             Reports include physical Wi-Fi/Ethernet history by default and exclude VPN/virtual
             adapters to avoid duplicate transport traffic. 'total' covers all recorded history.
+            Each row exposes raw counter intervals, daily archives, or mixed precision.
+            Long intervals include traffic observed after a gap, not an invented hourly allocation.
+            Coverage is collector-wide; use 'octetledger history' for the observation timeline.
+            """,
+        "history" => """
+            Usage: octetledger history [--days N] [--json]
+
+            Shows collector-wide observations, measured zero intervals, no-active-interface samples,
+            interruptions and bounded known collector events. Coverage before tracking or beyond
+            retained observation detail is unknown. Traffic interface filters do not alter this timeline.
+            Sleep/reboot causes are not guessed from elapsed time alone.
+            """,
+        "diagnostics" => """
+            Usage: octetledger diagnostics [preview|export <path>]
+
+            Preview the local JSON support report before exporting it. No automatic upload.
+            Raw traffic history, interface names/IDs, personal paths and raw log messages are excluded
+            by default. Existing destination files are not overwritten.
             """,
         "collector" => """
             Usage: octetledger collector [install|status|start|stop|uninstall]
@@ -690,8 +761,8 @@ static int ShowHelp(string[] arguments)
         "status" => """
             Usage: octetledger status
 
-            Shows database location, collector health, last collection time, default interface,
-            current Windows interfaces (live counters), and stored OctetLedger interface history.
+            Shows database location, collector health, last success, next expected collection,
+            observation detail and interruptions, current Windows counters and stored traffic.
             Windows counters and OctetLedger history cover different time windows.
             """,
         "interfaces" or "iflist" => """
