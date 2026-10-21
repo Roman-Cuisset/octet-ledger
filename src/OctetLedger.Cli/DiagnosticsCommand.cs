@@ -1,11 +1,166 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
 using OctetLedger.Core;
 
 namespace OctetLedger.Cli;
 
 internal static class DiagnosticsCommand
 {
+    private static readonly JsonSerializerOptions DiagnosticJsonOptions = new() { WriteIndented = true };
+
+    public static int RunDiagnostics(Version version, string[] arguments) =>
+        RunDiagnostics(arguments, () => CaptureDiagnosticReport(version), Console.Out, Console.Error);
+
+    internal static int RunDiagnostics(string[] arguments, Func<string> capture, TextWriter output, TextWriter error)
+    {
+        var preview = arguments.Length == 0 || arguments is ["preview"];
+        if (!preview && arguments is not ["export", _])
+        {
+            error.WriteLine("Usage: octetledger diagnostics [preview|export <path>]");
+            return 2;
+        }
+        try
+        {
+            if (!preview && !IsLocalExportPath(arguments[1]))
+            {
+                error.WriteLine("Diagnostics exports require a local drive; network destinations are not supported.");
+                return 2;
+            }
+            var report = capture();
+            if (preview)
+            {
+                // Preview is exactly the JSON payload used by export. A new invocation takes a new snapshot.
+                output.Write(report);
+                return 0;
+            }
+            using var stream = new FileStream(arguments[1], FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+            writer.Write(report);
+            output.WriteLine("Diagnostics exported locally. No data was sent over the network.");
+            return 0;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            // Exception messages and destination paths may contain private user or machine information.
+            error.WriteLine($"Diagnostics could not be written ({exception.GetType().Name}); existing files are never overwritten.");
+            return 1;
+        }
+    }
+    internal static bool IsLocalExportPath(string path)
+    {
+        if (path.StartsWith(@"\\", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal))
+            return false;
+        var root = Path.GetPathRoot(Path.GetFullPath(path))!;
+        var driveType = new DriveInfo(root).DriveType;
+        return driveType is DriveType.Fixed or DriveType.Removable or DriveType.Ram;
+    }
+
+
+    private static string CaptureDiagnosticReport(Version version)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var portable = AppDataPaths.IsPortable;
+        CollectorTaskStatus collector;
+        try
+        {
+            collector = portable
+                ? new CollectorTaskStatus(false, "Portable/manual collection")
+                : CollectorTaskManager.GetStatus();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+            System.ComponentModel.Win32Exception or TimeoutException or InvalidOperationException)
+        {
+            collector = new CollectorTaskStatus(false, "Unavailable");
+        }
+        var database = File.Exists(AppDataPaths.DatabasePath) ? TrafficStore.CheckIntegrity(AppDataPaths.DatabasePath) : null;
+        return SerializeDiagnosticReport(version, now, collector, portable,
+            !portable && CollectorTaskManager.StopRequested, database,
+            CollectorTaskManager.ReadEvents(DateTimeOffset.MinValue, now));
+    }
+
+    internal static string SerializeDiagnosticReport(Version version, DateTimeOffset snapshotUtc,
+        CollectorTaskStatus collector, bool portable, bool stopRequested, DatabaseCheckResult? database,
+        IReadOnlyList<CollectorEvent> events)
+    {
+        var timeline = events.Select(item => new
+        {
+            item.TimestampUtc,
+            item.LastTimestampUtc,
+            Kind = SafeEventKind(item.Kind),
+            item.Count,
+            ErrorType = SafeErrorType(item.ErrorType)
+        }).ToArray();
+        var report = new
+        {
+            FormatVersion = 1,
+            SnapshotUtc = snapshotUtc,
+            ApplicationVersion = version.ToString(),
+            Platform = OperatingSystem.IsWindows() ? "Windows" : OperatingSystem.IsLinux() ? "Linux" : "Other",
+            OsVersion = Environment.OSVersion.Version.ToString(),
+            OsArchitecture = RuntimeInformation.OSArchitecture.ToString(),
+            ProcessArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),
+            Collection = new
+            {
+                Mode = portable ? "portable_manual" : "per_user",
+                collector.Installed,
+                State = SafeCollectorState(collector.State),
+                collector.WatchdogInstalled,
+                StopRequested = stopRequested,
+                collector.ConsecutiveErrors
+            },
+            Database = new
+            {
+                SupportedSchemaVersion = TrafficStore.CurrentSchemaVersion,
+                Integrity = database is null ? "not_created" : database.IsHealthy ? "healthy" : "failed"
+            },
+            EventHistory = new
+            {
+                Coverage = "bounded_retained_history_not_lifetime",
+                CountMeaning = "group_count_covers_full_first_to_last_timestamp_span",
+                ErrorCounts = timeline.Where(item => item.Kind is "error" or "launcher_error" or "collector_exit")
+                    .GroupBy(item => item.ErrorType ?? "OtherError")
+                    .Select(group => new { Type = group.Key, Count = group.Sum(item => item.Count) }).ToArray(),
+                Events = timeline
+            },
+            Privacy = new
+            {
+                NetworkTransfer = false,
+                IncludesRawTraffic = false,
+                IncludesAdapterIdentifiers = false,
+                IncludesHostOrUserIdentifiers = false,
+                IncludesPathsOrSettings = false,
+                IncludesRawLogsOrExceptionMessages = false
+            }
+        };
+        return JsonSerializer.Serialize(report, DiagnosticJsonOptions) + Environment.NewLine;
+    }
+
+    private static string SafeCollectorState(string state) => state switch
+    {
+        "Portable/manual collection" or "Unavailable" or "Installed, stopped" or "Installation needs repair" or
+        "Not installed" or "Starting, first collection pending" or "Running, collection delayed" or
+        "Running, retrying after errors" or "Running" or "Running, startup repair needed" => state,
+        _ => "Unknown"
+    };
+
+    private static string SafeEventKind(string kind) => kind switch
+    {
+        "started" or "stopped" or "stop_requested" or "watchdog_stale_restart" or "error" or
+        "recovery" or "launcher_error" or "collector_exit" => kind,
+        _ => "other"
+    };
+
+    private static string? SafeErrorType(string? type) => type switch
+    {
+        null => null,
+        "IOException" or "UnauthorizedAccessException" or "InvalidOperationException" or "TimeoutException" or
+        "SqliteException" or "Win32Exception" or "NetworkInformationException" or "ArgumentException" or
+        "InvalidDataException" or "ObjectDisposedException" or "LauncherError" or "CollectorExit" => type,
+        _ => "OtherError"
+    };
+
     public static int ShowVersion(Version version, string[] arguments)
     {
         if (arguments.Length == 0)

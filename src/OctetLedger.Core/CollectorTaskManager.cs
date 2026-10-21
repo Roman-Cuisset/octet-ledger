@@ -4,7 +4,11 @@ using System.Text;
 
 namespace OctetLedger.Core;
 
-public sealed record CollectorTaskStatus(bool Installed, string State, string? Details = null);
+public sealed record CollectorTaskStatus(bool Installed, string State, string? Details = null)
+{
+    public bool? WatchdogInstalled { get; init; }
+    public int ConsecutiveErrors { get; init; }
+}
 
 public enum CollectorStartupState
 {
@@ -59,6 +63,23 @@ public static class CollectorTaskManager
     public static string StopPath => Path.Combine(AppDataPaths.DataDirectory, "collector.stop");
     public static string LogPath => Path.Combine(AppDataPaths.DataDirectory, "collector.log");
     public static string ErrorStatePath => Path.Combine(AppDataPaths.DataDirectory, "collector.errors");
+    private static BoundedCollectorLog Journal => new(LogPath, ErrorStatePath);
+
+    /// <summary>Reads retained collector-wide events. Group counts cover their full first/last timestamp span.</summary>
+    public static IReadOnlyList<CollectorEvent> ReadEvents(DateTimeOffset fromUtc, DateTimeOffset toUtc) =>
+        Journal.ReadEvents(fromUtc, toUtc);
+
+    public static int RecordLauncherEvent(string[] arguments)
+    {
+        if (arguments.Length != 2 || arguments[0] is not ("launcher_error" or "collector_exit") ||
+            !int.TryParse(arguments[1], System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var code))
+            return 2;
+        Journal.Record(arguments[0], DateTimeOffset.UtcNow,
+            arguments[0] == "launcher_error" ? "LauncherError" : "CollectorExit",
+            code.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return 0;
+    }
 
     public static CollectorTaskStatus GetStatus()
     {
@@ -68,8 +89,13 @@ public static class CollectorTaskManager
             Run("schtasks.exe", "/Query", "/TN", WatchdogTaskName).ExitCode == 0;
         using var process = TryGetRunningProcess();
         var running = process is not null || IsCollectorLockHeld();
+        var consecutiveErrors = ReadConsecutiveErrors();
         var status = DetermineStatus(registered, launcherExists && watchdogInstalled, running,
-            ReadLastSuccess(), DateTimeOffset.UtcNow, ReadConsecutiveErrors());
+            ReadLastSuccess(), DateTimeOffset.UtcNow, consecutiveErrors) with
+        {
+            WatchdogInstalled = watchdogInstalled,
+            ConsecutiveErrors = consecutiveErrors
+        };
         if (!watchdogInstalled && registered)
             return status with { Details = "Independent watchdog is missing. Run 'octetledger collector install' to repair supervision." };
         return status;
@@ -83,7 +109,7 @@ public static class CollectorTaskManager
         var temporaryLauncher = $"{LauncherPath}.tmp";
         try
         {
-            File.WriteAllText(temporaryLauncher, BuildLauncherScript(fullPath, LogPath));
+            File.WriteAllText(temporaryLauncher, BuildLauncherScript(fullPath));
             File.Move(temporaryLauncher, LauncherPath, overwrite: true);
         }
         finally
@@ -135,7 +161,7 @@ public static class CollectorTaskManager
         if (existingProcess is not null && ShouldRestartCollector(lastSuccess,
             existingProcess.StartTime.ToUniversalTime(), DateTimeOffset.UtcNow))
         {
-            RecordBackgroundError(new TimeoutException("Watchdog restarting collector: no successful collection for more than three minutes."));
+            Journal.Record("watchdog_stale_restart", DateTimeOffset.UtcNow);
             Stop();
             TryDeleteStopFile();
         }
@@ -172,6 +198,7 @@ public static class CollectorTaskManager
     public static void Stop()
     {
         Directory.CreateDirectory(AppDataPaths.DataDirectory);
+        if (!StopRequested) Journal.Record("stop_requested", DateTimeOffset.UtcNow);
         File.WriteAllText(StopPath, DateTimeOffset.UtcNow.ToString("O"));
         using var process = TryGetRunningProcess();
         if (process is null)
@@ -222,6 +249,7 @@ public static class CollectorTaskManager
                 Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 current.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 executable));
+            Journal.Record("started", DateTimeOffset.UtcNow);
             return true;
         }
         catch
@@ -246,31 +274,17 @@ public static class CollectorTaskManager
         {
             if (File.Exists(temporary)) File.Delete(temporary);
         }
-        TryDeleteErrorStateFile();
+        Journal.RecordSuccess(DateTimeOffset.UtcNow);
     }
 
-    public static void RecordBackgroundError(Exception exception)
-    {
-        try
-        {
-            Directory.CreateDirectory(AppDataPaths.DataDirectory);
-            if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 256 * 1024)
-            {
-                File.Move(LogPath, $"{LogPath}.previous", overwrite: true);
-            }
-            File.AppendAllText(LogPath,
-                $"{DateTimeOffset.Now:O} {exception.GetType().Name}: {exception.Message}{Environment.NewLine}");
-            var count = ReadConsecutiveErrors() + 1;
-            File.WriteAllText(ErrorStatePath, $"{count}|{DateTimeOffset.UtcNow:O}|{exception.GetType().Name}");
-        }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-    }
+    public static void RecordBackgroundError(Exception exception) =>
+        Journal.RecordError(exception, DateTimeOffset.UtcNow);
 
     public static void ReleaseBackgroundProcess()
     {
         try
         {
+            if (collectorLock is not null) Journal.Record("stopped", DateTimeOffset.UtcNow);
             if (File.Exists(PidPath))
             {
                 var text = File.ReadAllText(PidPath).Split('|', 2)[0];
@@ -351,17 +365,7 @@ public static class CollectorTaskManager
         catch (UnauthorizedAccessException) { return null; }
     }
 
-    private static int ReadConsecutiveErrors()
-    {
-        try
-        {
-            if (!File.Exists(ErrorStatePath)) return 0;
-            var text = File.ReadAllText(ErrorStatePath).Split('|', 2)[0];
-            return int.TryParse(text, out var count) && count > 0 ? count : 0;
-        }
-        catch (IOException) { return 0; }
-        catch (UnauthorizedAccessException) { return 0; }
-    }
+    private static int ReadConsecutiveErrors() => Journal.ReadConsecutiveErrors();
 
     internal static CollectorTaskStatus DetermineStatus(
         bool registered,
@@ -416,12 +420,6 @@ public static class CollectorTaskManager
         catch (UnauthorizedAccessException) { }
     }
 
-    private static void TryDeleteErrorStateFile()
-    {
-        try { if (File.Exists(ErrorStatePath)) File.Delete(ErrorStatePath); }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-    }
 
     internal static CollectorStartupState WaitForStartup(
         Func<(bool Running, bool Ready)> observe,
@@ -440,10 +438,9 @@ public static class CollectorTaskManager
         return observedRunning ? CollectorStartupState.Pending : CollectorStartupState.Failed;
     }
 
-    internal static string BuildLauncherScript(string executablePath, string logPath)
+    internal static string BuildLauncherScript(string executablePath)
     {
         var escapedPath = executablePath.Replace("\"", "\"\"", StringComparison.Ordinal);
-        var escapedLogPath = logPath.Replace("\"", "\"\"", StringComparison.Ordinal);
         return $"""
             Option Explicit
             Dim shell, fileSystem, command, exitCode
@@ -459,23 +456,22 @@ public static class CollectorTaskManager
                 Err.Clear
                 exitCode = shell.Run(command, 0, True)
                 If Err.Number <> 0 Then
-                    AppendLog "Launcher error " & CStr(Err.Number) & ": " & Err.Description
+                    AppendLog "launcher_error", Err.Number
                     Err.Clear
                     WScript.Sleep 30000
                 ElseIf exitCode = 3 Then
                     Exit Do
                 Else
                     If fileSystem.FileExists(stopPath) Then Exit Do
-                    AppendLog "Collector exited with code " & CStr(exitCode) & "; restarting"
+                    AppendLog "collector_exit", exitCode
                     WScript.Sleep 5000
                 End If
             Loop
 
-            Sub AppendLog(message)
-                Dim stream
-                Set stream = fileSystem.OpenTextFile("{escapedLogPath}", 8, True)
-                stream.WriteLine Now & " " & message
-                stream.Close
+            Sub AppendLog(kind, code)
+                ' Native logging owns serialization, rotation, record bounds and repeat grouping.
+                ' No launcher path appends directly to a log file.
+                shell.Run Chr(34) & "{escapedPath}" & Chr(34) & " collector log " & kind & " " & CStr(code), 0, True
             End Sub
             """;
     }
