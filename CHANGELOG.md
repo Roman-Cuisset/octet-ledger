@@ -1,6 +1,19 @@
 # Changelog
 
 
+## 0.9.0
+
+### Dashboard redesign
+
+- Redesign the web dashboard with a modern dark theme, gradient accents, and improved visual hierarchy.
+- Split chart bars into stacked download (blue) and upload (purple) with hover tooltips showing per-day breakdown.
+- Add collapsible sections for collection health, observations, interruptions, and events to reduce page length.
+- Add cards with colored accent borders and tinted metric values for total, daily average, and peak day.
+- Add status bar with colored health indicator dot reflecting collector state and consecutive errors.
+- Add timeline visualization with colored dots for interruptions and collector events.
+- Improve table readability with right-aligned numeric columns and hover highlights.
+- Improve responsive layout for narrow viewports.
+
 ## 0.8.0
 
 ### Visibility and collection health
