@@ -39,7 +39,7 @@ octetledger dashboard
 
 The first sample establishes a baseline; recorded traffic appears after the next one-minute sample.
 
-![OctetLedger local 30-day dashboard with synthetic usage data](docs/images/dashboard.png)
+![OctetLedger local 30-day interactive dashboard](docs/images/dashboard.png)
 
 ## Install
 
