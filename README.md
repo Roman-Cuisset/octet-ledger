@@ -2,7 +2,7 @@
 
 [![Build](https://github.com/Roman-Cuisset/octet-ledger/actions/workflows/build.yml/badge.svg)](https://github.com/Roman-Cuisset/octet-ledger/actions/workflows/build.yml)
 [![Latest release](https://img.shields.io/github/v/release/Roman-Cuisset/octet-ledger)](https://github.com/Roman-Cuisset/octet-ledger/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/Roman-Cuisset/octet-ledger/total)](https://github.com/Roman-Cuisset/octet-ledger/releases)
+[![Downloads](https://img.shields.io/github/downloads/Roman-Cuisset/octet-ledger/total?style=flat)](https://github.com/Roman-Cuisset/octet-ledger/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **A privacy-first vnStat-style bandwidth monitor for Windows.**
