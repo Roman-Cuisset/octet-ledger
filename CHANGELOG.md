@@ -1,6 +1,20 @@
 # Changelog
 
 
+## 0.10.0
+
+### Interactive SVG traffic chart
+
+- Replace static HTML bars with a high-performance interactive SVG chart featuring 3 viewing modes:
+  - **Stacked**: Combined download (cyan-blue) and upload (purple) with rounded pill tops.
+  - **Side-by-side**: Grouped download and upload bars for direct 1-to-1 comparison per day.
+  - **Trend**: Smooth Catmull-Rom spline curves with translucent shaded area fill and day vertices.
+- Add dynamic Y-axis scale with 5 reference gridlines and formatted byte units.
+- Add quick stats summary bar: Total Download (with percentage), Total Upload (with percentage), Download/Upload ratio, and Peak day.
+- Add floating glassmorphism tooltip card with exact download/upload metrics, percentages, observation count, and interruption warnings.
+- Replace intrusive full-column warning boxes with clean, discrete interruption indicator dots.
+- Highlight current day with bold styling and partial measurement indication.
+
 ## 0.9.0
 
 ### Dashboard redesign
