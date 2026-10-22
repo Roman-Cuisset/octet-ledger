@@ -4,11 +4,17 @@ public static class NetworkInterfaceSelector
 {
     private static readonly string[] VirtualMarkers =
     [
+        "Async Adapter",
         "Bluetooth",
         "Hyper-V",
         "IP-HTTPS",
+        "Kernel Debug",
+        "Loopback",
+        "Miniport",
         "Npcap",
+        "Pseudo-Interface",
         "Tailscale",
+        "TAP",
         "Teredo",
         "Tunnel",
         "Virtual",
@@ -17,6 +23,9 @@ public static class NetworkInterfaceSelector
         "VPN",
         "vEthernet",
         "vSwitch",
+        "WAN",
+        "Wi-Fi Direct",
+        "WireGuard",
         "WSL"
     ];
 
@@ -55,8 +64,10 @@ public static class NetworkInterfaceSelector
     {
         if (type != "Wireless80211" && !type.Contains("Ethernet", StringComparison.OrdinalIgnoreCase))
             return false;
+        if (name.Contains('*'))
+            return false;
         return !VirtualMarkers.Any(marker =>
             name.Contains(marker, StringComparison.OrdinalIgnoreCase) ||
             description.Contains(marker, StringComparison.OrdinalIgnoreCase));
-    }
+}
 }

@@ -54,6 +54,22 @@ public class NetworkInterfaceSelectorTests
         Assert.Equal("wifi", NetworkInterfaceSelector.SelectPrimary([snapshot])?.Id);
     }
 
+    [Theory]
+    [InlineData("Wi-Fi", "Intel(R) Wireless-AC 9560 160MHz", "Wireless80211", true)]
+    [InlineData("Ethernet", "Realtek PCIe GbE Family Controller", "Ethernet", true)]
+    [InlineData("Connexion au réseau local* 8", "WAN Miniport (IP)", "Ethernet", false)]
+    [InlineData("Connexion au réseau local* 11", "WAN Miniport (IPv6)", "Ethernet", false)]
+    [InlineData("Connexion au réseau local* 12", "WAN Miniport (Network Monitor)", "Ethernet", false)]
+    [InlineData("Connexion au réseau local* 1", "Microsoft Wi-Fi Direct Virtual Adapter #3", "Wireless80211", false)]
+    [InlineData("Tailscale", "Tailscale Tunnel", "53", false)]
+    [InlineData("vEthernet (Default Switch)", "Hyper-V Virtual Ethernet Adapter", "Ethernet", false)]
+    [InlineData("Loopback", "Software Loopback Interface 1", "Loopback", false)]
+    public void IsLikelyPhysicalIdentifiesRealHardwareAndExcludesSynthesizedAdapters(
+        string name, string description, string type, bool expected)
+    {
+        Assert.Equal(expected, NetworkInterfaceSelector.IsLikelyPhysical(name, description, type));
+    }
+
     private static NetworkInterfaceSnapshot Snapshot(string id, string name, string type, long received)
     {
         return new NetworkInterfaceSnapshot(
