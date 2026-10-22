@@ -69,7 +69,18 @@ public sealed record OctetLedgerSettings(
         try
         {
             File.WriteAllText(temporaryPath, JsonSerializer.Serialize(this, JsonOptions));
-            File.Move(temporaryPath, settingsPath, overwrite: true);
+            for (var attempt = 1; attempt <= 10; attempt++)
+            {
+                try
+                {
+                    File.Move(temporaryPath, settingsPath, overwrite: true);
+                    return;
+                }
+                catch (Exception exception) when (attempt < 10 && (exception is IOException or UnauthorizedAccessException))
+                {
+                    Thread.Sleep(20 * attempt);
+                }
+            }
         }
         finally
         {

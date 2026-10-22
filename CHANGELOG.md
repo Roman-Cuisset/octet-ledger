@@ -1,6 +1,14 @@
 # Changelog
 
 
+## 0.10.1
+
+### Virtual adapter filtering & documentation
+
+- Exclude Windows WAN miniports (`WAN Miniport (IP)`, `(IPv6)`, `(Network Monitor)`, etc.), Wi-Fi Direct virtual adapters, and synthesized adapters with asterisk in names from default physical selection.
+- Prevent inactive zero-byte virtual adapter rows from cluttering dashboard and daily reports.
+- Update README dashboard preview screenshot with the modern v0.10.x interactive SVG chart.
+
 ## 0.10.0
 
 ### Interactive SVG traffic chart
