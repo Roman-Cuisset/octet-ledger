@@ -69,5 +69,5 @@ public static class NetworkInterfaceSelector
         return !VirtualMarkers.Any(marker =>
             name.Contains(marker, StringComparison.OrdinalIgnoreCase) ||
             description.Contains(marker, StringComparison.OrdinalIgnoreCase));
-}
+    }
 }
