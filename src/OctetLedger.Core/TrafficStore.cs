@@ -348,18 +348,30 @@ public sealed partial class TrafficStore : IDisposable
     public RetentionResult ApplyRetention(int rawDays, DateTimeOffset nowUtc) =>
         ApplyRetention(rawDays, nowUtc, TimeZoneInfo.Local);
 
-    internal RetentionResult ApplyRetention(int rawDays, DateTimeOffset nowUtc, TimeZoneInfo timeZone)
+    internal RetentionResult ApplyRetention(int rawDays, DateTimeOffset nowUtc, TimeZoneInfo timeZone, bool onlyIfDue = false)
     {
         if (rawDays is < 1 or > 3660) throw new ArgumentOutOfRangeException(nameof(rawDays));
         var cutoffLocal = TimeZoneInfo.ConvertTime(nowUtc, timeZone).Date.AddDays(-rawDays);
         var cutoff = CalendarPeriods.StartOfDayUtc(cutoffLocal, timeZone);
+        using var transaction = connection.BeginTransaction(deferred: false);
+        if (onlyIfDue)
+        {
+            // The existing coverage boundary is transactional. Indexed probes also catch legacy/imported
+            // rows older than that boundary without scanning or re-aggregating the database on restart.
+            using var due = HistoryCommand(transaction, """
+                SELECT EXISTS(SELECT 1 FROM collection_state WHERE id = 1 AND raw_history_from_utc < $cutoff)
+                    OR EXISTS(SELECT 1 FROM traffic_minute WHERE minute_utc < $cutoff)
+                    OR EXISTS(SELECT 1 FROM collection_sample WHERE captured_utc < $cutoff)
+                    OR EXISTS(SELECT 1 FROM collection_gap WHERE start_utc < $cutoff);
+                """, ("$cutoff", FormatTimestamp(cutoff)));
+            if ((long)due.ExecuteScalar()! == 0) return new RetentionResult(0, 0);
+        }
         connection.CreateFunction("retention_day", (string timestamp) =>
         {
             var utc = DateTimeOffset.Parse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
             var localDay = TimeZoneInfo.ConvertTime(utc, timeZone).Date;
             return FormatTimestamp(CalendarPeriods.StartOfDayUtc(localDay, timeZone));
         }, isDeterministic: true);
-        using var transaction = connection.BeginTransaction();
         using var archive = connection.CreateCommand();
         archive.Transaction = transaction;
         archive.CommandText = """

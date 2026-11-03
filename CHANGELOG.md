@@ -25,6 +25,13 @@
 - Ignore interruptions of excluded interfaces when marking the chart, while retaining them in the complete interruption timeline; honour explicit virtual-interface preferences.
 - Keep unknown coverage separate from interruptions and classify intervals on half-open day boundaries, including instantaneous clock events.
 
+### Automatic SQLite retention
+
+- Apply configured raw retention after successful `collect` calls and on the first successful `monitor` collection of each local calendar day.
+- Skip repeated maintenance within a running monitor and use indexed SQLite checks on restart; reuse the existing transactional coverage boundary without changing the database schema or settings format.
+- Preserve archived traffic and observation aggregates atomically; retry interrupted retention and serialize competing maintenance writers.
+- Cover configured retention, same-day restarts, rollback after an interrupted archive, old imported rows, concurrent maintenance, long outages, and both daylight-saving transitions.
+
 ## 0.10.1
 
 ### Virtual adapter filtering & documentation

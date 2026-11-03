@@ -194,6 +194,7 @@ static int CollectOnce()
     Console.WriteLine($"Collected {result.InterfacesObserved} interfaces: {ByteFormatter.Format(result.BytesReceived)} received, " +
                       $"{ByteFormatter.Format(result.BytesSent)} sent.");
     if (result.BaselinesCreated > 0) Console.WriteLine($"Initialized {result.BaselinesCreated} new interface baselines.");
+    new AutomaticRetention().RunIfDue(store, DateTimeOffset.UtcNow);
     AutomaticBackup.RunIfDue(DateTimeOffset.UtcNow);
     return 0;
 }
@@ -224,6 +225,7 @@ static async Task<int> MonitorAsync(string[] arguments)
     try
     {
         using var cancellation = CreateCancellation();
+        var retention = new AutomaticRetention();
         if (!quiet) Console.WriteLine($"Collecting every {interval:0.##} seconds. Press Ctrl+C to stop.");
         try
         {
@@ -236,6 +238,7 @@ static async Task<int> MonitorAsync(string[] arguments)
                     var result = store.CollectCurrent(NetworkInterfaceReader.ReadDistinct);
                     if (background) CollectorTaskManager.MarkBackgroundReady();
                     if (!quiet) Console.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}  ↓ {ByteFormatter.Format(result.BytesReceived),10}  ↑ {ByteFormatter.Format(result.BytesSent),10}");
+                    retention.RunIfDue(store, DateTimeOffset.UtcNow);
                     AutomaticBackup.RunIfDue(DateTimeOffset.UtcNow);
                 }
                 catch (Exception exception) when (background)

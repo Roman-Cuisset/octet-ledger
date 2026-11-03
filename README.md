@@ -206,6 +206,13 @@ removing raw minute rows; `database vacuum` reclaims SQLite space. Hourly report
 raw minutes: a daily archive cannot recover individual hours. Archives made by older versions used
 UTC dates and cannot be split back into exact local days after their raw minutes have been removed.
 
+After a successful collection, `collect` checks the configured raw retention (90 days by default).
+`monitor` checks on its first successful collection and when the local calendar date changes, not
+on every sample. Indexed checks against existing SQLite state avoid redundant archiving after a
+restart or a concurrent collector. Archiving, raw-row removal, and observation aggregation commit
+together; an interrupted operation is retried without adding the same traffic twice. Historical
+daily totals remain available. Vacuuming is still an explicit command, not an automatic daily task.
+
 `dashboard` serves a read-only dashboard on `http://127.0.0.1:8765` and never binds to a network
 interface. `--data-dir` selects an isolated database and settings directory for portable use.
 Portable data directories deliberately do not control the registered per-user collector: use
