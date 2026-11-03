@@ -261,6 +261,10 @@ dotnet publish src/OctetLedger.Cli --configuration Release --runtime win-x64 `
   -p:DebugType=None --output artifacts/win-x64
 ```
 
+The test suite includes a dashboard security regression executed in headless Microsoft Edge.
+Install Edge in its standard Windows location, or set `OCTETLEDGER_TEST_BROWSER` to a
+Chromium-based browser executable. No browser package or external service is required.
+
 Releases contain self-contained single-file executables for Windows x64 and ARM64. CI executes both
 binaries on native GitHub-hosted Windows runners. The x64 job also exercises installation, update,
 rejection of a bad update, collector crash recovery, rollback, and uninstallation.

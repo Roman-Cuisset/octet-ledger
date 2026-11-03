@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- Render local interface names, interruption reasons, and collector event kinds as text in dashboard timelines instead of interpreting them as HTML.
+- Exercise hostile local data in a real Chromium browser regression test, including the three existing chart modes.
 
 ## 0.10.1
 

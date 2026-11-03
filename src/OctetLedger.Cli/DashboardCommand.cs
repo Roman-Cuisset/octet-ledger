@@ -141,7 +141,7 @@ internal static class DashboardCommand
     }
 
 
-    private const string Html = """
+    internal const string Html = """
 <!doctype html>
 <html lang="en">
 <head>
@@ -396,6 +396,14 @@ const R=r=>({'unknown_collection_gap':'Unknown cause','interface_not_observed':'
 function addRow(id,txts,nums){const tr=document.createElement('tr');txts.forEach((t,i)=>{
   const td=document.createElement('td');td.textContent=t;if(nums[i])td.className='n';tr.append(td)});el(id).append(tr)}
 
+function addTimelineItem(target,start,end,description,className=''){
+  const li=document.createElement('li'),time=document.createElement('span'),detail=document.createElement('span');
+  li.className=className;time.className='t';time.textContent=T(start);
+  detail.className='r';detail.textContent=description;
+  li.append(time,document.createTextNode(' → '+end),document.createElement('br'),detail);
+  el(target).append(li);
+}
+
 let chartState = { mode: 'stacked', data: null };
 
 function renderSvgChart() {
@@ -644,9 +652,9 @@ fetch('/api/data').then(async r=>{if(!r.ok)throw new Error(await r.text());retur
   // Gaps
   const gaps=V(history,'Gaps');
   for(const g of gaps){
-    const nm=V(g,'InterfaceName'),li=document.createElement('li');li.className='w';
-    li.innerHTML='<span class="t">'+T(V(g,'StartUtc'))+'</span> \u2192 '+(V(g,'EndUtc')?T(V(g,'EndUtc')):'ongoing')+'<br><span class="r">'+R(V(g,'Reason'))+(nm?' \u00B7 '+nm:'')+'</span>';
-    el('gaps').append(li);
+    const nm=V(g,'InterfaceName');
+    addTimelineItem('gaps',V(g,'StartUtc'),V(g,'EndUtc')?T(V(g,'EndUtc')):'ongoing',
+      R(V(g,'Reason'))+(nm?' · '+nm:''),'w');
   }
   if(!gaps.length){const li=document.createElement('li');li.textContent='No interruption in retained detail.';el('gaps').append(li)}
   el('gcnt').textContent=gaps.length;
@@ -654,9 +662,8 @@ fetch('/api/data').then(async r=>{if(!r.ok)throw new Error(await r.text());retur
   // Events
   const ev=events.slice(-20);
   for(const e of ev){
-    const li=document.createElement('li');
-    li.innerHTML='<span class="t">'+T(V(e,'TimestampUtc'))+'</span> \u2192 '+T(V(e,'LastTimestampUtc'))+'<br><span class="r">'+V(e,'Kind').replaceAll('_',' ')+' \u00D7'+V(e,'Count')+'</span>';
-    el('events').append(li);
+    addTimelineItem('events',V(e,'TimestampUtc'),T(V(e,'LastTimestampUtc')),
+      V(e,'Kind').replaceAll('_',' ')+' ×'+V(e,'Count'));
   }
   if(!ev.length){const li=document.createElement('li');li.textContent='No events in this period.';el('events').append(li)}
   el('ecnt').textContent=ev.length;
