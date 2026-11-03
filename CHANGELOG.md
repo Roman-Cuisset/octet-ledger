@@ -5,13 +5,19 @@
 ### Security
 
 - Render local interface names, interruption reasons, and collector event kinds as text in dashboard timelines instead of interpreting them as HTML.
-- Exercise hostile local data in a real Chromium browser regression test, including the three existing chart modes.
+- Exercise hostile local data in a real Chromium browser regression test.
 
 ### Statistics correctness
 
 - Ignore late or repeated pre-captured collection frames without replacing newer counter baselines, changing interface availability, or regressing collection history.
 - Acquire SQLite's write lock before reading current Windows counters in both `collect` and `monitor`, serializing competing collectors while preserving clock rollback and counter-reset handling.
 - Add regressions for out-of-order and repeated frames, disconnection history, reset baselines, migrated databases, concurrent writers, and failed acquisition. Preserve the existing database schema and stored history; no retroactive correction of previously inflated totals is attempted.
+
+### Dashboard measurement fidelity
+
+- Split Trend curves and shaded areas at days without measurements instead of substituting zero or joining unmeasured periods; preserve isolated measured points.
+- Bound Catmull-Rom Bézier control points to adjacent measured values, preventing negative traffic and overshoot between samples.
+- Distinguish measured zero-byte days, including daily archives without raw observations, from missing measurements and baseline-only observations in all three chart modes.
 
 ## 0.10.1
 

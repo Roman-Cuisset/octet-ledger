@@ -177,6 +177,12 @@ Each report row exposes its measurement precision (`counter intervals`, `daily a
 `octetledger history` shows the collector-wide observation timeline, while the web dashboard displays
 a collection health summary, interruptions timeline, and striped bars for unmeasured intervals.
 
+All three dashboard chart modes distinguish a measured zero from a day without measurements in the
+selected interface scope. A baseline observation alone is not a measured interval; retained zero-byte
+daily archives remain measurements even when raw observation counts are unavailable. Trend curves
+and shaded areas stop at missing days, retain isolated measured points, and stay between adjacent
+measured values instead of overshooting below zero.
+
 Stored traffic is attributed to the time at which the counter difference is observed. OctetLedger
 also stores the real elapsed time since the preceding observation. `Peak avg` is therefore the
 highest average over an observed interval, not an instantaneous packet-level peak. Reports warn
@@ -266,7 +272,7 @@ dotnet publish src/OctetLedger.Cli --configuration Release --runtime win-x64 `
   -p:DebugType=None --output artifacts/win-x64
 ```
 
-The test suite includes a dashboard security regression executed in headless Microsoft Edge.
+The test suite includes dashboard security and chart regressions executed in headless Microsoft Edge.
 Install Edge in its standard Windows location, or set `OCTETLEDGER_TEST_BROWSER` to a
 Chromium-based browser executable. No browser package or external service is required.
 

@@ -432,35 +432,39 @@ function renderSvgChart() {
 
   if (mode === 'area') {
     const dlPts = [], ulPts = [];
-    calendar.forEach((d, i) => {
-      const cx = leftX + i * step + step / 2;
-      const rv = recvD.get(d.period) ?? 0, sv = sentD.get(d.period) ?? 0;
-      const rH = (rv / mx) * chartH, sH = (sv / mx) * chartH;
-      dlPts.push({ x: cx, y: botY - rH });
-      ulPts.push({ x: cx, y: botY - sH });
-    });
     function buildSpline(pts) {
       if (!pts.length) return { line: '', area: '' };
       let d = `M ${pts[0].x} ${pts[0].y}`;
       for (let i = 0; i < pts.length - 1; i++) {
         const p0 = pts[i === 0 ? 0 : i - 1], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2 >= pts.length ? pts.length - 1 : i + 2];
-        const cp1x = p1.x + (p2.x - p0.x) / 6, cp1y = p1.y + (p2.y - p0.y) / 6;
-        const cp2x = p2.x - (p3.x - p1.x) / 6, cp2y = p2.y - (p3.y - p1.y) / 6;
+        // A cubic Bézier stays in its control-point hull; constrain it to the two measured values.
+        const lo = Math.min(p1.y, p2.y), hi = Math.max(p1.y, p2.y);
+        const bounded = y => Math.max(lo, Math.min(hi, y));
+        const cp1x = p1.x + (p2.x - p0.x) / 6, cp1y = bounded(p1.y + (p2.y - p0.y) / 6);
+        const cp2x = p2.x - (p3.x - p1.x) / 6, cp2y = bounded(p2.y - (p3.y - p1.y) / 6);
         d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
       }
       return { line: d, area: d + ` L ${pts[pts.length - 1].x} ${botY} L ${pts[0].x} ${botY} Z` };
     }
-    const dlS = buildSpline(dlPts), ulS = buildSpline(ulPts);
-    barsHtml += `<path d="${dlS.area}" fill="url(#g-dl-area)"/>`;
-    barsHtml += `<path d="${dlS.line}" fill="none" stroke="var(--blue)" stroke-width="2.5"/>`;
-    barsHtml += `<path d="${ulS.area}" fill="url(#g-ul-area)"/>`;
-    barsHtml += `<path d="${ulS.line}" fill="none" stroke="var(--purple)" stroke-width="2"/>`;
-    dlPts.forEach((p, i) => {
-      if (recvD.has(calendar[i].period)) barsHtml += `<circle cx="${p.x}" cy="${p.y}" r="3" fill="var(--blue)"/>`;
+    function drawSegment() {
+      if (dlPts.length > 1) {
+        const dlS = buildSpline(dlPts), ulS = buildSpline(ulPts);
+        barsHtml += `<path d="${dlS.area}" fill="url(#g-dl-area)"/>`;
+        barsHtml += `<path d="${dlS.line}" fill="none" stroke="var(--blue)" stroke-width="2.5"/>`;
+        barsHtml += `<path d="${ulS.area}" fill="url(#g-ul-area)"/>`;
+        barsHtml += `<path d="${ulS.line}" fill="none" stroke="var(--purple)" stroke-width="2"/>`;
+      }
+      dlPts.forEach(p => { barsHtml += `<circle cx="${p.x}" cy="${p.y}" r="3" fill="var(--blue)"/>`; });
+      ulPts.forEach(p => { barsHtml += `<circle cx="${p.x}" cy="${p.y}" r="2.5" fill="var(--purple)"/>`; });
+      dlPts.length = ulPts.length = 0;
+    }
+    calendar.forEach((d, i) => {
+      if (!totD.has(d.period)) { drawSegment(); return; }
+      const cx = leftX + i * step + step / 2;
+      dlPts.push({ x: cx, y: botY - recvD.get(d.period) / mx * chartH });
+      ulPts.push({ x: cx, y: botY - sentD.get(d.period) / mx * chartH });
     });
-    ulPts.forEach((p, i) => {
-      if (sentD.has(calendar[i].period)) barsHtml += `<circle cx="${p.x}" cy="${p.y}" r="2.5" fill="var(--purple)"/>`;
-    });
+    drawSegment();
   }
 
   calendar.forEach((d, i) => {
@@ -483,7 +487,7 @@ function renderSvgChart() {
         if (sH > 0) {
           barsHtml += `<rect x="${bx}" y="${botY - rH - sH}" width="${bw}" height="${sH}" fill="url(#g-ul)" rx="3" opacity="${isToday?0.75:1}"/>`;
         }
-      } else if (!has || d.observations === 0) {
+      } else if (!has) {
         barsHtml += `<rect x="${bx}" y="${botY - 6}" width="${bw}" height="6" fill="url(#g-hatch)" rx="2" opacity="0.6"/>`;
       } else {
         // Zero measured traffic
@@ -496,11 +500,14 @@ function renderSvgChart() {
       if (has && tot > 0) {
         if (rH > 0) barsHtml += `<rect x="${cx - bw - 1}" y="${botY - rH}" width="${bw}" height="${rH}" fill="url(#g-dl)" rx="2.5" opacity="${isToday?0.75:1}"/>`;
         if (sH > 0) barsHtml += `<rect x="${cx + 1}" y="${botY - sH}" width="${bw}" height="${sH}" fill="url(#g-ul)" rx="2.5" opacity="${isToday?0.75:1}"/>`;
-      } else if (!has || d.observations === 0) {
+      } else if (!has) {
         barsHtml += `<rect x="${cx - bw}" y="${botY - 6}" width="${bw * 2 + 2}" height="6" fill="url(#g-hatch)" rx="2" opacity="0.6"/>`;
       } else {
         barsHtml += `<rect x="${cx - bw}" y="${botY - 2}" width="${bw * 2 + 2}" height="2" fill="var(--mt)" rx="1" opacity="0.5"/>`;
       }
+    } else if (mode === 'area' && !has) {
+      const bw = Math.min(18, Math.max(8, step - 6));
+      barsHtml += `<rect x="${cx - bw / 2}" y="${botY - 6}" width="${bw}" height="6" fill="url(#g-hatch)" rx="2" opacity="0.6"/>`;
     }
 
     // Interruption marker dot
