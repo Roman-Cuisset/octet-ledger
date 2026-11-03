@@ -70,6 +70,7 @@ internal static class DashboardCommand
                 var nextExpectedUtc = CollectionDisplay.NextExpectedUtc(collector, lastCollectionUtc);
                 var history = store.ReadCollectionHistory(start, now);
                 var events = CollectorTaskManager.ReadEvents(start, now);
+                var selectedIds = buckets.Select(bucket => bucket.InterfaceId).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var calendar = Enumerable.Range(0, 30).Select(index =>
                 {
                     var date = localToday.AddDays(index - 29);
@@ -77,6 +78,7 @@ internal static class DashboardCommand
                     var day = history.Days.FirstOrDefault(value => value.Period == period);
                     var from = new DateTimeOffset(date).ToUniversalTime();
                     var to = new DateTimeOffset(date.AddDays(1)).ToUniversalTime();
+                    var gaps = GetGapIndicators(history.Gaps, selectedIds, from, to, now);
                     return new
                     {
                         period,
@@ -84,7 +86,9 @@ internal static class DashboardCommand
                         measuredIntervals = day?.MeasuredIntervals ?? 0,
                         zeroTrafficIntervals = day?.ZeroTrafficIntervals ?? 0,
                         noActiveInterfaceObservations = day?.NoActiveInterfaceObservations ?? 0,
-                        hasGap = history.Gaps.Any(gap => gap.StartUtc < to && (gap.EndUtc ?? now) > from)
+                        hasCollectorGap = gaps.Collector,
+                        hasInterfaceGap = gaps.Interface,
+                        hasUnknownCoverage = gaps.UnknownCoverage
                     };
                 }).ToArray();
                 var preferred = buckets.FirstOrDefault(bucket =>
@@ -140,6 +144,33 @@ internal static class DashboardCommand
         response.OutputStream.Write(bytes);
     }
 
+    internal static (bool Collector, bool Interface, bool UnknownCoverage) GetGapIndicators(
+        IReadOnlyList<CollectionGap> gaps, IReadOnlySet<string> selectedIds,
+        DateTimeOffset from, DateTimeOffset to, DateTimeOffset now)
+    {
+        var collector = false;
+        var networkInterface = false;
+        var unknownCoverage = false;
+        foreach (var gap in gaps)
+        {
+            var end = gap.EndUtc ?? now;
+            // Closed zero-duration clock events and a gap opened just now still belong to their start day.
+            var instantaneous = end == gap.StartUtc;
+            if (gap.StartUtc >= to || gap.StartUtc > now ||
+                (instantaneous ? gap.StartUtc < from : end <= from))
+                continue;
+
+            if (gap.InterfaceId is not null)
+                networkInterface |= selectedIds.Contains(gap.InterfaceId);
+            else if (gap.Reason is "unknown_collection_gap" or "clock_not_advanced")
+                collector = true;
+            else if (gap.Reason == "no_active_interfaces")
+                networkInterface = true;
+            else if (gap.Reason == "unknown_coverage")
+                unknownCoverage = true;
+        }
+        return (collector, networkInterface, unknownCoverage);
+    }
 
     internal const string Html = """
 <!doctype html>
@@ -345,7 +376,8 @@ details table th{background:var(--s1)}
     <span><i style="background:var(--blue)"></i> Download</span>
     <span><i style="background:var(--purple)"></i> Upload</span>
     <span><i style="background:repeating-linear-gradient(135deg,transparent,transparent 3px,var(--mt) 3px,var(--mt) 4px)"></i> No measurement</span>
-    <span><i style="width:7px;height:7px;border-radius:50%;background:var(--yellow)"></i> Interruption</span>
+    <span><i style="width:7px;height:7px;border-radius:50%;background:var(--yellow)"></i> Collection interruption</span>
+    <span><i style="width:7px;height:7px;border-radius:50%;border:1px solid var(--yellow)"></i> Interface interruption</span>
   </div>
 </div>
 
@@ -510,9 +542,12 @@ function renderSvgChart() {
       barsHtml += `<rect x="${cx - bw / 2}" y="${botY - 6}" width="${bw}" height="6" fill="url(#g-hatch)" rx="2" opacity="0.6"/>`;
     }
 
-    // Interruption marker dot
-    if (d.hasGap) {
-      barsHtml += `<circle cx="${cx}" cy="${botY + 8}" r="2.5" fill="var(--yellow)"/>`;
+    // Collector-wide interruptions and selected-interface interruptions have different markers.
+    if (d.hasCollectorGap) {
+      barsHtml += `<circle cx="${cx - (d.hasInterfaceGap ? 3 : 0)}" cy="${botY + 8}" r="2.5" fill="var(--yellow)"><title>Collection interruption</title></circle>`;
+    }
+    if (d.hasInterfaceGap) {
+      barsHtml += `<circle cx="${cx + (d.hasCollectorGap ? 3 : 0)}" cy="${botY + 8}" r="2.5" fill="none" stroke="var(--yellow)" stroke-width="1.5"><title>Interface interruption in selected scope</title></circle>`;
     }
 
     // Date label
@@ -559,10 +594,10 @@ function renderSvgChart() {
         tipHtml += `<div class="tip-row" style="color:var(--mt)"><i>Measured 0 bytes traffic</i></div>`;
       }
 
-      tipHtml += `<div class="tip-row" style="font-size:0.7rem;color:var(--mt);margin-top:4px">${d.observations} observation(s)</div>`;
-      if (d.hasGap) {
-        tipHtml += `<div class="tip-warn">⚠️ Interruption recorded</div>`;
-      }
+      tipHtml += `<div class="tip-row" style="font-size:0.7rem;color:var(--mt);margin-top:4px">${d.observations} collector observation(s)</div>`;
+      if (d.hasCollectorGap) tipHtml += `<div class="tip-warn">⚠️ Collection interruption recorded</div>`;
+      if (d.hasInterfaceGap) tipHtml += `<div class="tip-warn">⚠️ Interface interruption in selected scope</div>`;
+      if (d.hasUnknownCoverage) tipHtml += `<div class="tip-row" style="color:var(--mt)">Coverage unknown for part of this day</div>`;
 
       tip.innerHTML = tipHtml;
       tip.classList.add('visible');

@@ -19,6 +19,12 @@
 - Bound Catmull-Rom Bézier control points to adjacent measured values, preventing negative traffic and overshoot between samples.
 - Distinguish measured zero-byte days, including daily archives without raw observations, from missing measurements and baseline-only observations in all three chart modes.
 
+### Dashboard interruption scope
+
+- Distinguish collection-wide interruptions from selected-interface interruptions with filled and hollow markers, separate tooltip labels, and an explicit legend.
+- Ignore interruptions of excluded interfaces when marking the chart, while retaining them in the complete interruption timeline; honour explicit virtual-interface preferences.
+- Keep unknown coverage separate from interruptions and classify intervals on half-open day boundaries, including instantaneous clock events.
+
 ## 0.10.1
 
 ### Virtual adapter filtering & documentation

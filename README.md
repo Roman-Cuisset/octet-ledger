@@ -183,6 +183,11 @@ daily archives remain measurements even when raw observation counts are unavaila
 and shaded areas stop at missing days, retain isolated measured points, and stay between adjacent
 measured values instead of overshooting below zero.
 
+Filled yellow markers indicate collection-wide interruptions; hollow yellow markers indicate an
+interruption affecting an interface in the displayed scope. Excluded virtual adapters do not raise
+chart warnings. Unknown coverage is labelled separately rather than blamed on the collector.
+Observation counts remain collector-wide, and the detailed interruption timeline retains all interfaces.
+
 Stored traffic is attributed to the time at which the counter difference is observed. OctetLedger
 also stores the real elapsed time since the preceding observation. `Peak avg` is therefore the
 highest average over an observed interval, not an instantaneous packet-level peak. Reports warn
