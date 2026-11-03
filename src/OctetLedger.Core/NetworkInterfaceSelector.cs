@@ -10,10 +10,11 @@ public static class NetworkInterfaceSelector
         "IP-HTTPS",
         "Kernel Debug",
         "Loopback",
-        "Miniport",
+        "ISATAP",
         "Npcap",
         "Pseudo-Interface",
         "Tailscale",
+        "OpenVPN",
         "TAP",
         "Teredo",
         "Tunnel",
@@ -23,9 +24,10 @@ public static class NetworkInterfaceSelector
         "VPN",
         "vEthernet",
         "vSwitch",
-        "WAN",
+        "WAN Miniport",
         "Wi-Fi Direct",
         "WireGuard",
+        "Wintun",
         "WSL"
     ];
 
@@ -64,10 +66,28 @@ public static class NetworkInterfaceSelector
     {
         if (type != "Wireless80211" && !type.Contains("Ethernet", StringComparison.OrdinalIgnoreCase))
             return false;
-        if (name.Contains('*'))
-            return false;
-        return !VirtualMarkers.Any(marker =>
-            name.Contains(marker, StringComparison.OrdinalIgnoreCase) ||
-            description.Contains(marker, StringComparison.OrdinalIgnoreCase));
+
+        // The friendly name can be freely renamed. Prefer the device/driver description;
+        // use the name only when older stored metadata has no description.
+        var identity = string.IsNullOrWhiteSpace(description) ? name : description;
+        foreach (var marker in VirtualMarkers)
+            if (ContainsMarker(identity, marker)) return false;
+        return true;
+    }
+
+    private static bool ContainsMarker(string identity, string marker)
+    {
+        var start = 0;
+        while (start < identity.Length)
+        {
+            var index = identity.IndexOf(marker, start, StringComparison.OrdinalIgnoreCase);
+            if (index < 0) return false;
+            var end = index + marker.Length;
+            if ((index == 0 || !char.IsLetterOrDigit(identity[index - 1])) &&
+                (end == identity.Length || !char.IsLetterOrDigit(identity[end])))
+                return true;
+            start = end;
+        }
+        return false;
     }
 }

@@ -142,6 +142,12 @@ to Ethernet does not hide earlier traffic. VPN and virtual adapters are excluded
 transport traffic. Use `--interface` to pin one adapter or `--all` to inspect every stored adapter;
 rows remain separate and are never merged into a misleading grand total.
 
+Automatic physical/virtual classification uses the adapter type and device/driver description.
+A renamed friendly name does not override an available description; known virtual-driver markers
+are matched as delimited terms rather than arbitrary substrings. The name is a fallback only when
+the description is missing. This remains a heuristic: use an explicit preference or `--interface`
+for an unrecognized driver. Filtering never deletes stored adapter history.
+
 The first collection creates a baseline. Traffic is recorded from the next sample onward. Data and
 settings live in `%LOCALAPPDATA%\OctetLedger`. Uninstalling the program preserves these files.
 If a stored report detects that automatic collection is stopped, it prints a warning and the repair

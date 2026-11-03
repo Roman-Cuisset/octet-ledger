@@ -32,6 +32,12 @@
 - Preserve archived traffic and observation aggregates atomically; retry interrupted retention and serialize competing maintenance writers.
 - Cover configured retention, same-day restarts, rollback after an interrupted archive, old imported rows, concurrent maintenance, long outages, and both daylight-saving transitions.
 
+### Network interface classification
+
+- Prefer the device/driver description over the user-editable interface name, so hardware renamed with `VPN`, `WAN`, `TAP`, `Virtual`, or an asterisk is not hidden solely by its name.
+- Match virtual-driver markers on term boundaries, replace the overly broad `WAN`/`Miniport` exclusions with `WAN Miniport`, and retain detection of known virtual/tunnel drivers.
+- Preserve explicit preferences and interface selectors, the single-interface fallback, and unfiltered `--all` reports without rewriting stored interface metadata.
+
 ## 0.10.1
 
 ### Virtual adapter filtering & documentation
