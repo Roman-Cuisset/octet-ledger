@@ -7,6 +7,12 @@
 - Render local interface names, interruption reasons, and collector event kinds as text in dashboard timelines instead of interpreting them as HTML.
 - Exercise hostile local data in a real Chromium browser regression test, including the three existing chart modes.
 
+### Statistics correctness
+
+- Ignore late or repeated pre-captured collection frames without replacing newer counter baselines, changing interface availability, or regressing collection history.
+- Acquire SQLite's write lock before reading current Windows counters in both `collect` and `monitor`, serializing competing collectors while preserving clock rollback and counter-reset handling.
+- Add regressions for out-of-order and repeated frames, disconnection history, reset baselines, migrated databases, concurrent writers, and failed acquisition. Preserve the existing database schema and stored history; no retroactive correction of previously inflated totals is attempted.
+
 ## 0.10.1
 
 ### Virtual adapter filtering & documentation

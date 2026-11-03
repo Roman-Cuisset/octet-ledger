@@ -93,17 +93,17 @@ public class TrafficStoreTests
     }
 
     [Fact]
-    public void CollectRebaselinesWhenObservationTimeDoesNotAdvance()
+    public void CollectCurrentRebaselinesWhenTheClockMovesBackwards()
     {
         var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
         var databasePath = Path.Combine(testDirectory, "test.db");
         try
         {
             using var store = new TrafficStore(databasePath);
-            store.Collect([Snapshot(1_000, 1_000, 2)]);
+            store.CollectCurrent(() => [Snapshot(1_000, 1_000, 2)]);
 
-            var backwards = store.Collect([Snapshot(2_000, 2_000, 1)]);
-            var resumed = store.Collect([Snapshot(3_000, 4_000, 3)]);
+            var backwards = store.CollectCurrent(() => [Snapshot(2_000, 2_000, 1)]);
+            var resumed = store.CollectCurrent(() => [Snapshot(3_000, 4_000, 3)]);
 
             Assert.Equal(0, backwards.BytesReceived + backwards.BytesSent);
             Assert.Equal(3_000, resumed.BytesReceived + resumed.BytesSent);

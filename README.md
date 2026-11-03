@@ -148,6 +148,11 @@ If a stored report detects that automatic collection is stopped, it prints a war
 command. Background collection retries transient errors and records them in `collector.log` instead
 of silently exiting.
 
+Concurrent `collect`/`monitor` commands serialize counter acquisition and storage with SQLite's writer
+lock. Late or repeated pre-captured frames cannot replace newer baselines or alter collection history.
+Current acquisitions still rebaseline after a clock rollback or counter reset. No database migration
+or historical data rewrite is required; previously inflated totals are not retroactively repaired.
+
 Collector health is based on the latest successful collection, not only on the presence of a
 process. `Running, collection delayed` means that the process exists but no collection has
 succeeded for more than three minutes. `Running, retrying after errors` exposes repeated failures

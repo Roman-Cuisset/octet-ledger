@@ -130,11 +130,11 @@ public sealed class CollectionHistoryTests
     {
         using var database = new TestDatabase();
         using var store = new TrafficStore(database.Path);
-        store.Collect([Snapshot(2, 1_000, 1_000)]);
-        store.Collect([Snapshot(1, 2_000, 2_000)]);
-        store.Collect([Snapshot(3, 3_000, 4_000)]);
-        store.Collect([Snapshot(4, 100, 5_000)]);
-        store.Collect([Snapshot(5, 200, 5_100)]);
+        store.CollectCurrent(() => [Snapshot(2, 1_000, 1_000)]);
+        store.CollectCurrent(() => [Snapshot(1, 2_000, 2_000)]);
+        store.CollectCurrent(() => [Snapshot(3, 3_000, 4_000)]);
+        store.CollectCurrent(() => [Snapshot(4, 100, 5_000)]);
+        store.CollectCurrent(() => [Snapshot(5, 200, 5_100)]);
         var buckets = store.ReadBuckets(DateTimeOffset.UnixEpoch);
         Assert.All(buckets, bucket => Assert.True(bucket.IntervalSeconds > 0));
         Assert.Equal(3_200, buckets.Sum(bucket => bucket.BytesReceived + bucket.BytesSent));

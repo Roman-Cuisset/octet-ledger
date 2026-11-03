@@ -110,7 +110,7 @@ public sealed partial class TrafficStore
         return new CollectionHistory(last, aggregatedDays, gaps.OrderBy(gap => gap.StartUtc).ToArray(), started, rawFrom);
     }
 
-    private void RecordMissingInterfaces(NetworkInterfaceSnapshot[] frame, NetworkInterfaceSnapshot[] observed,
+    private void RecordMissingInterfaces(IReadOnlyList<NetworkInterfaceSnapshot> frame, IReadOnlyList<NetworkInterfaceSnapshot> observed,
         DateTimeOffset capturedAt, SqliteTransaction transaction)
     {
         var missing = new List<(string Id, string Name)>();

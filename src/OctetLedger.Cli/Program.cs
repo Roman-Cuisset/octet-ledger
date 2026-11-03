@@ -190,7 +190,7 @@ static async Task<int> ShowLiveAsync(string[] arguments)
 static int CollectOnce()
 {
     using var store = new TrafficStore();
-    var result = store.Collect(NetworkInterfaceReader.ReadDistinct());
+    var result = store.CollectCurrent(NetworkInterfaceReader.ReadDistinct);
     Console.WriteLine($"Collected {result.InterfacesObserved} interfaces: {ByteFormatter.Format(result.BytesReceived)} received, " +
                       $"{ByteFormatter.Format(result.BytesSent)} sent.");
     if (result.BaselinesCreated > 0) Console.WriteLine($"Initialized {result.BaselinesCreated} new interface baselines.");
@@ -233,7 +233,7 @@ static async Task<int> MonitorAsync(string[] arguments)
                 try
                 {
                     using var store = new TrafficStore();
-                    var result = store.Collect(NetworkInterfaceReader.ReadDistinct());
+                    var result = store.CollectCurrent(NetworkInterfaceReader.ReadDistinct);
                     if (background) CollectorTaskManager.MarkBackgroundReady();
                     if (!quiet) Console.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}  ↓ {ByteFormatter.Format(result.BytesReceived),10}  ↑ {ByteFormatter.Format(result.BytesSent),10}");
                     AutomaticBackup.RunIfDue(DateTimeOffset.UtcNow);

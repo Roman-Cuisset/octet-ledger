@@ -38,10 +38,42 @@ public sealed partial class TrafficStore : IDisposable
 
     public string DatabasePath { get; }
 
+    /// <summary>Stores a captured frame. Frames at or before the last committed collection are ignored.</summary>
     public CollectionResult Collect(IEnumerable<NetworkInterfaceSnapshot> snapshots, DateTimeOffset? capturedAtUtc = null)
     {
         var frame = snapshots.ToArray();
-        var capturedAt = capturedAtUtc ?? (frame.Length == 0 ? DateTimeOffset.UtcNow : frame.Max(snapshot => snapshot.CapturedAt));
+        using var transaction = connection.BeginTransaction(deferred: false);
+        var result = CollectFrame(frame, capturedAtUtc, transaction, currentCapture: false);
+        transaction.Commit();
+        return result;
+    }
+
+    /// <summary>Serializes current counter acquisition and storage with other SQLite writers.</summary>
+    /// <remarks>The callback must read current counters, not return a previously captured frame.</remarks>
+    public CollectionResult CollectCurrent(Func<IReadOnlyList<NetworkInterfaceSnapshot>> captureSnapshots)
+    {
+        ArgumentNullException.ThrowIfNull(captureSnapshots);
+        // Acquire the write lock before reading Windows counters, including across collector processes.
+        using var transaction = connection.BeginTransaction(deferred: false);
+        var result = CollectFrame(captureSnapshots(), null, transaction, currentCapture: true);
+        transaction.Commit();
+        return result;
+    }
+
+    private CollectionResult CollectFrame(IReadOnlyList<NetworkInterfaceSnapshot> frame, DateTimeOffset? capturedAtUtc,
+        SqliteTransaction transaction, bool currentCapture)
+    {
+        var capturedAt = capturedAtUtc ?? (frame.Count == 0 ? DateTimeOffset.UtcNow : frame.Max(snapshot => snapshot.CapturedAt));
+        if (!currentCapture)
+        {
+            using var latest = HistoryCommand(transaction, """
+                SELECT COALESCE((SELECT last_success_utc FROM collection_state WHERE id = 1),
+                                (SELECT MAX(last_seen_utc) FROM adapter_state));
+                """);
+            if (latest.ExecuteScalar() is string timestamp && capturedAt <= ParseTimestamp(timestamp))
+                return new CollectionResult(0, 0, 0, 0);
+        }
+
         var observed = frame.Where(snapshot => snapshot.Status == "Up" && snapshot.Type != "Loopback").ToArray();
         var receivedTotal = 0L;
         var sentTotal = 0L;
@@ -49,12 +81,13 @@ public sealed partial class TrafficStore : IDisposable
         var measured = 0;
         var zero = 0;
 
-        using var transaction = connection.BeginTransaction();
         RecordMissingInterfaces(frame, observed, capturedAt, transaction);
         foreach (var snapshot in observed)
         {
-            CloseInterfaceGaps(snapshot.Id, snapshot.CapturedAt, transaction);
             var previous = ReadState(snapshot.Id, transaction);
+            if (!currentCapture && previous is not null && snapshot.CapturedAt <= previous.Value.LastSeen)
+                continue;
+            CloseInterfaceGaps(snapshot.Id, snapshot.CapturedAt, transaction);
             if (previous is null)
             {
                 baselines++;
@@ -85,7 +118,6 @@ public sealed partial class TrafficStore : IDisposable
         }
 
         RecordCollection(capturedAt, observed.Length, measured, zero, transaction);
-        transaction.Commit();
         return new CollectionResult(observed.Length, baselines, receivedTotal, sentTotal);
     }
 
