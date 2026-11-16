@@ -4,10 +4,13 @@ param(
     [int]$WaitForProcessId = 0,
     [ValidateRange(1, 300)]
     [int]$WaitForProcessTimeoutSeconds = 30,
-    [string]$CleanupDirectory
+    [string]$CleanupDirectory,
+    [ValidateRange(1, 300)]
+    [int]$ExecutableTimeoutSeconds = 60
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'process.ps1')
 if ([string]::IsNullOrWhiteSpace($Source)) {
     $packagedExecutable = Join-Path $PSScriptRoot 'octetledger.exe'
     $repositoryExecutable = Join-Path $PSScriptRoot '..\artifacts\win-x64\octetledger.exe'
@@ -68,8 +71,8 @@ if (-not $staged) {
 
 # Validate the staged executable before interrupting a working installation.
 try {
-    $stagedVersion = & $stagedExecutable version 2>&1
-    if ($LASTEXITCODE -ne 0 -or ($stagedVersion -join "`n") -notmatch '^OctetLedger\s+') {
+    $stagedVersion = Invoke-OctetLedgerExecutable $stagedExecutable @('version') $ExecutableTimeoutSeconds
+    if ($stagedVersion.Output -notmatch '^OctetLedger\s+') {
         throw 'The staged OctetLedger executable failed its startup validation. The existing installation was not changed.'
     }
 }
@@ -83,7 +86,7 @@ $pathAdded = $false
 try {
     if ($hadExistingInstallation) {
         # Preserve the launcher and Run registration throughout the update.
-        & $installedExecutable collector stop 2>$null | Out-Null
+        Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'stop') $ExecutableTimeoutSeconds | Out-Null
 
         # Clean up a collector left behind by an interrupted older update.
         Get-CimInstance Win32_Process -Filter "Name='octetledger.exe'" -ErrorAction SilentlyContinue |
@@ -110,6 +113,9 @@ try {
         Move-Item -LiteralPath $stagedExecutable -Destination $installedExecutable
     }
     $replacementMade = $true
+    # The user explicitly ran this installer and the staged executable passed preflight.
+    # Trust only the installed copy: retain the download's Internet mark and all Windows policies.
+    Unblock-File -LiteralPath $installedExecutable
 
     if ($env:OCTETLEDGER_TEST_FAIL_AFTER_REPLACEMENT -eq '1') {
         throw 'Simulated post-replacement failure for installer rollback testing.'
@@ -126,23 +132,22 @@ try {
         $pathAdded = $true
     }
     $rollbackScript = Join-Path $PSScriptRoot 'rollback.ps1'
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'process.ps1') -Destination (Join-Path $installDirectory 'process.ps1') -Force
     if (Test-Path -LiteralPath $rollbackScript) {
         Copy-Item -LiteralPath $rollbackScript -Destination (Join-Path $installDirectory 'rollback.ps1') -Force
     }
 
     Write-Host "OctetLedger installed at: $installedExecutable"
-    & $installedExecutable collector install
-    if ($LASTEXITCODE -ne 0) {
-        throw "OctetLedger was copied, but its automatic collector could not be installed."
-    }
+    Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'install') $ExecutableTimeoutSeconds | Out-Null
     if ($hadExistingInstallation -and (Test-Path -LiteralPath $operationBackup)) {
         Move-Item -LiteralPath $operationBackup -Destination $rollbackExecutable -Force
     }
 }
 catch {
+    $failure = $_
     if ($hadExistingInstallation) {
         if ($replacementMade -and (Test-Path -LiteralPath $operationBackup)) {
-            try { & $installedExecutable collector stop 2>$null | Out-Null } catch {}
+            try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'stop') $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not stop the rejected version: $_" }
             Get-CimInstance Win32_Process -Filter "Name='octetledger.exe'" -ErrorAction SilentlyContinue |
                 Where-Object {
                     $_.ExecutablePath -eq $installedExecutable -and
@@ -162,10 +167,11 @@ catch {
                     Start-Sleep -Milliseconds 250
                 }
             }
+            Unblock-File -LiteralPath $installedExecutable
         }
-        try { & $installedExecutable collector start 2>$null | Out-Null } catch {}
+        try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'start') $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not restart the preserved version: $_" }
     } elseif ($replacementMade) {
-        try { & $installedExecutable collector uninstall 2>$null | Out-Null } catch {}
+        try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'uninstall') $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not unregister the failed installation: $_" }
         Remove-Item -LiteralPath $installedExecutable -Force -ErrorAction SilentlyContinue
     }
     if ($pathAdded) {
@@ -175,7 +181,7 @@ catch {
         }
         [Environment]::SetEnvironmentVariable('Path', ($remainingEntries -join ';'), 'User')
     }
-    throw
+    throw $failure
 }
 finally {
     Remove-Item -LiteralPath $stagedExecutable -Force -ErrorAction SilentlyContinue

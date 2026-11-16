@@ -46,19 +46,71 @@ function Copy-ItemWithRetry([string]$Source, [string]$Destination) {
         }
     }
 }
+function Assert-InstalledZoneMarker {
+    if (Get-Item -LiteralPath $installedExecutable -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
+        throw 'The installed executable retained the repeated Internet-origin execution warning.'
+    }
+    if (-not (Get-Item -LiteralPath $downloadExecutable -Stream Zone.Identifier -ErrorAction SilentlyContinue)) {
+        throw 'The original download was unblocked instead of only the installed copy.'
+    }
+    if ((Get-Content -LiteralPath $installedExecutable -Stream lifecycle-metadata -Raw).Trim() -ne 'retained metadata') {
+        throw 'Removing the installed Internet mark discarded an unrelated named stream.'
+    }
+}
+function Assert-PreservedInstallation([string]$ExpectedHash) {
+    if ((Get-Sha256Hex $installedExecutable) -ne $ExpectedHash) { throw 'An installation failure changed the working executable.' }
+    if ((Get-Sha256Hex $settingsPath) -ne $settingsHash) { throw 'Installation or rollback changed existing settings.' }
+    & $candidateExecutable database verify (Join-Path $testDataDirectory 'octetledger.db')
+    if ($LASTEXITCODE -ne 0) { throw 'Installation or rollback lost existing application statistics.' }
+    Assert-InstalledZoneMarker
+}
+function Test-CandidateFailure([string]$Operation, [string]$Mode, [scriptblock]$Action, [string]$ExpectedHash) {
+    $pidFile = Join-Path $testRoot 'candidate.pid'
+    Remove-Item -LiteralPath $pidFile -ErrorAction SilentlyContinue
+    $env:OCTETLEDGER_VALIDATION_MODE = $Mode
+    $env:OCTETLEDGER_VALIDATION_PID_FILE = $pidFile
+    $isTimeout = $Mode.StartsWith('hang-', [StringComparison]::Ordinal)
+    $expectedError = if ($isTimeout) { 'did not complete within' } else { 'failed with exit code 42. Validation fixture rejected collector installation.' }
+    $failureMessage = $null
+    try {
+        try { & $Action }
+        catch { $failureMessage = $_.Exception.Message }
+    }
+    finally {
+        Remove-Item Env:OCTETLEDGER_VALIDATION_MODE -ErrorAction SilentlyContinue
+        Remove-Item Env:OCTETLEDGER_VALIDATION_PID_FILE -ErrorAction SilentlyContinue
+    }
+    if (-not $failureMessage -or -not $failureMessage.Contains($expectedError)) {
+        throw "$Operation did not report the expected $Mode failure. Actual error: $failureMessage"
+    }
+    if ($isTimeout) {
+        if (-not (Test-Path -LiteralPath $pidFile)) { throw 'The timeout fixture did not reach its hanging command.' }
+        $candidatePid = [int](Get-Content -LiteralPath $pidFile -Raw)
+        if (Get-Process -Id $candidatePid -ErrorAction SilentlyContinue) { throw 'The timed-out executable is still running.' }
+    }
+    Assert-PreservedInstallation $ExpectedHash
+    Record-Step "$Operation-candidate-$Mode-rejected-and-existing-data-preserved"
+}
 $resolvedPackage = (Resolve-Path -LiteralPath $PackagePath).Path
-$testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("octetledger-lifecycle-" + [Guid]::NewGuid().ToString('N'))
+$testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("octetledger lifecycle " + [Guid]::NewGuid().ToString('N'))
 $packageDirectory = Join-Path $testRoot 'package'
 $testLocalAppData = Join-Path $testRoot 'localappdata'
 $originalLocalAppData = $env:LOCALAPPDATA
 $originalUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $originalFailureInjection = $env:OCTETLEDGER_TEST_FAIL_AFTER_REPLACEMENT
+$originalValidationMode = $env:OCTETLEDGER_VALIDATION_MODE
+$originalValidationPid = $env:OCTETLEDGER_VALIDATION_PID_FILE
+Remove-Item Env:OCTETLEDGER_VALIDATION_MODE -ErrorAction SilentlyContinue
+Remove-Item Env:OCTETLEDGER_VALIDATION_PID_FILE -ErrorAction SilentlyContinue
 Remove-Item Env:OCTETLEDGER_TEST_FAIL_AFTER_REPLACEMENT -ErrorAction SilentlyContinue
 
 try {
     New-Item -ItemType Directory -Path $packageDirectory -Force | Out-Null
     New-Item -ItemType Directory -Path $testLocalAppData -Force | Out-Null
     Expand-Archive -LiteralPath $resolvedPackage -DestinationPath $packageDirectory
+    $downloadExecutable = Join-Path $packageDirectory 'octetledger.exe'
+    Set-Content -LiteralPath $downloadExecutable -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
+    Set-Content -LiteralPath $downloadExecutable -Stream lifecycle-metadata -Value 'retained metadata'
     $env:LOCALAPPDATA = $testLocalAppData
     $installScript = Join-Path $packageDirectory 'install.ps1'
     $uninstallScript = Join-Path $packageDirectory 'uninstall.ps1'
@@ -77,6 +129,8 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $installedExecutable)) {
         throw 'Fresh installation failed.'
     }
+    Assert-InstalledZoneMarker
+    Record-Step 'download-mark-retained-installed-mark-cleared-other-streams-preserved'
     $evidence.version = (& $installedExecutable version) -join ' '
     if ($LASTEXITCODE -ne 0) { throw 'Installed version could not be read.' }
     & $installedExecutable database check
@@ -119,8 +173,10 @@ try {
     Add-Content -LiteralPath $updatedExecutable -Value 'OctetLedger lifecycle update overlay' -Encoding Ascii
     & $updatedExecutable version
     if ($LASTEXITCODE -ne 0) { throw 'The distinct update fixture did not remain executable.' }
-    & $installScript -Source $updatedExecutable
+    # Keep the existing fourth positional argument for download cleanup compatible.
+    & $installScript $updatedExecutable 0 30 ''
     if ($LASTEXITCODE -ne 0) { throw 'In-place update failed.' }
+    Assert-InstalledZoneMarker
     $updatedHash = Get-Sha256Hex $installedExecutable
     if ($updatedHash -eq $knownGoodHash) { throw 'Update fixture did not change the installed executable.' }
     $installedRollback = Join-Path $testLocalAppData 'Programs\OctetLedger\rollback.ps1'
@@ -151,15 +207,47 @@ try {
     $candidateDirectory = Join-Path $testRoot 'incompatible-rollback'
     & dotnet publish (Join-Path $PSScriptRoot 'validation-rollback/OctetLedger.RollbackCandidate.csproj') `
         --configuration Release --runtime $fixtureRuntime --self-contained true `
-        -p:PublishSingleFile=true --artifacts-path (Join-Path $testRoot 'build') --output $candidateDirectory --nologo
+        -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true --artifacts-path (Join-Path $testRoot 'build') --output $candidateDirectory --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Unable to build the real incompatible rollback fixture; .NET 10 SDK is required.' }
+    $candidateExecutable = Join-Path $candidateDirectory 'OctetLedger.RollbackCandidate.exe'
+    & $candidateExecutable database seed (Join-Path $testDataDirectory 'octetledger.db')
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to seed persistent statistics for update validation.' }
+    $settingsPath = Join-Path $testDataDirectory 'settings.json'
+    '{"CheckForUpdates":false,"AutomaticBackups":false,"RetentionRawDays":90,"MonthlyBudgetBytes":1234567}' |
+        Set-Content -LiteralPath $settingsPath -Encoding UTF8
+    $settingsHash = Get-Sha256Hex $settingsPath
+    $workerBeforeTimeout = Get-Content -LiteralPath (Join-Path $testDataDirectory 'collector.pid') -Raw
+    # Give the healthy collector time to stop and restart on slower Windows runners.
+    $candidateTimeoutSeconds = 10
+    Test-CandidateFailure 'install' 'hang-version' { & $installScript -Source $candidateExecutable -ExecutableTimeoutSeconds $candidateTimeoutSeconds } $updatedHash
+    if ((Get-Content -LiteralPath (Join-Path $testDataDirectory 'collector.pid') -Raw) -ne $workerBeforeTimeout) {
+        throw 'A staged-version timeout interrupted the working collector.'
+    }
+    Test-CandidateFailure 'install' 'fail-install' { & $installScript -Source $candidateExecutable -ExecutableTimeoutSeconds $candidateTimeoutSeconds } $updatedHash
+    Test-CandidateFailure 'install' 'hang-install' { & $installScript -Source $candidateExecutable -ExecutableTimeoutSeconds $candidateTimeoutSeconds } $updatedHash
+
+    . (Join-Path $packageDirectory 'process.ps1')
+    $env:OCTETLEDGER_VALIDATION_MODE = 'echo'
+    try {
+        $arguments = @('argument with spaces', 'embedded"quote', 'ending\', '')
+        $echo = Invoke-OctetLedgerExecutable $candidateExecutable $arguments 5
+        if ($echo.Output -cne ($arguments -join "`n")) { throw 'Native argument boundaries were changed.' }
+    }
+    finally { Remove-Item Env:OCTETLEDGER_VALIDATION_MODE -ErrorAction SilentlyContinue }
+    Record-Step 'native-arguments-preserve-spaces-quotes-backslashes-and-empty-values'
+
+    Copy-ItemWithRetry $candidateExecutable $rollbackExecutable
+    Test-CandidateFailure 'rollback' 'hang-check' { & $installedRollback -ExecutableTimeoutSeconds $candidateTimeoutSeconds } $updatedHash
+    Test-CandidateFailure 'rollback' 'fail-install' { & $installedRollback -ExecutableTimeoutSeconds $candidateTimeoutSeconds } $updatedHash
+    Test-CandidateFailure 'rollback' 'hang-install' { & $installedRollback -ExecutableTimeoutSeconds $candidateTimeoutSeconds } $updatedHash
     Copy-ItemWithRetry (Join-Path $candidateDirectory 'OctetLedger.RollbackCandidate.exe') $rollbackExecutable
     & $rollbackExecutable version
     if ($LASTEXITCODE -ne 0) { throw 'Schema-incompatible rollback fixture did not pass executable version validation.' }
     $workerBeforeRejectedRollback = Get-Content -LiteralPath (Join-Path $testDataDirectory 'collector.pid') -Raw
     $readyBeforeRejectedRollback = [DateTimeOffset]::Parse((Get-Content -LiteralPath $readyPath -Raw).Trim())
     $schemaRejected = $false
-    try { & $installedRollback } catch { $schemaRejected = $true }
+    try { & $installedRollback }
+    catch { $schemaRejected = $_.Exception.Message.Contains('Restore a matching database backup explicitly before downgrading.') }
     $schemaProbeMarker = Join-Path (Split-Path -Parent $installedExecutable) 'rollback-validation-database-check'
     if (-not $schemaRejected -or -not (Test-Path -LiteralPath $schemaProbeMarker) -or
         (Get-Sha256Hex $installedExecutable) -ne $updatedHash) {
@@ -178,10 +266,11 @@ try {
     if ($LASTEXITCODE -ne 0 -or (Get-Sha256Hex $installedExecutable) -ne $knownGoodHash) {
         throw 'Explicit rollback did not restore the previous executable.'
     }
+    Assert-PreservedInstallation $knownGoodHash
     Record-Step 'reject-invalid-rollback-and-restore-previous-executable'
 
     # A live parent beyond the timeout must abort before collector stop or executable replacement.
-    $parent = Start-Process powershell.exe -ArgumentList '-NoProfile', '-Command', 'Start-Sleep -Seconds 30' -PassThru
+    $parent = Start-Process powershell.exe -ArgumentList '-NoProfile', '-Command', 'Start-Sleep -Seconds 30' -WindowStyle Hidden -PassThru
     $parentTimeoutRejected = $false
     try {
         try {
@@ -390,6 +479,8 @@ finally {
         } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     $env:LOCALAPPDATA = $originalLocalAppData
     $env:OCTETLEDGER_TEST_FAIL_AFTER_REPLACEMENT = $originalFailureInjection
+    $env:OCTETLEDGER_VALIDATION_MODE = $originalValidationMode
+    $env:OCTETLEDGER_VALIDATION_PID_FILE = $originalValidationPid
     [Environment]::SetEnvironmentVariable('Path', $originalUserPath, 'User')
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
     $evidence.completedUtc = [DateTimeOffset]::UtcNow.ToString('O')

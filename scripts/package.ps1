@@ -42,6 +42,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1') -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.cmd') -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'rollback.ps1') -Destination $packageDirectory
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'process.ps1') -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall.ps1') -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall.cmd') -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\README.md') -Destination $packageDirectory

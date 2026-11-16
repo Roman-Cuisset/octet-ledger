@@ -2,10 +2,13 @@
 param(
     [int]$WaitForProcessId = 0,
     [ValidateRange(1, 300)]
-    [int]$WaitForProcessTimeoutSeconds = 30
+    [int]$WaitForProcessTimeoutSeconds = 30,
+    [ValidateRange(1, 300)]
+    [int]$ExecutableTimeoutSeconds = 60
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'process.ps1')
 $installDirectory = Join-Path $env:LOCALAPPDATA 'Programs\OctetLedger'
 $installedExecutable = Join-Path $installDirectory 'octetledger.exe'
 $previousExecutable = Join-Path $installDirectory 'octetledger.rollback.exe'
@@ -20,20 +23,25 @@ if ($WaitForProcessId -gt 0) {
         Wait-Process -InputObject $parent -Timeout $WaitForProcessTimeoutSeconds -ErrorAction Stop
     }
 }
-$previousVersion = & $previousExecutable version 2>&1
-if ($LASTEXITCODE -ne 0 -or ($previousVersion -join "`n") -notmatch '^OctetLedger\s+') {
+$previousVersion = Invoke-OctetLedgerExecutable $previousExecutable @('version') $ExecutableTimeoutSeconds
+if ($previousVersion.Output -notmatch '^OctetLedger\s+') {
     throw 'The previous executable failed validation. The current installation was not changed.'
 }
 $databasePath = Join-Path $env:LOCALAPPDATA 'OctetLedger\octetledger.db'
 if (Test-Path -LiteralPath $databasePath) {
-    $compatibility = & $previousExecutable database check $databasePath 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "The previous executable cannot read the current database. The current installation was not changed. Restore a matching database backup explicitly before downgrading. $($compatibility -join ' ')"
+    try {
+        Invoke-OctetLedgerExecutable $previousExecutable @('database', 'check', $databasePath) $ExecutableTimeoutSeconds | Out-Null
+    }
+    catch [TimeoutException] { throw }
+    catch {
+        throw [InvalidOperationException]::new(
+            "The previous executable cannot read the current database. The current installation was not changed. Restore a matching database backup explicitly before downgrading. $($_.Exception.Message)",
+            $_.Exception)
     }
 }
 $replacementMade = $false
 try {
-    & $installedExecutable collector stop 2>$null | Out-Null
+    Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'stop') $ExecutableTimeoutSeconds | Out-Null
 
     # Clean up any collector process holding the executable.
     Get-CimInstance Win32_Process -Filter "Name='octetledger.exe'" -ErrorAction SilentlyContinue |
@@ -57,20 +65,23 @@ try {
             Start-Sleep -Milliseconds 250
         }
     }
-    $version = & $installedExecutable version 2>&1
-    if ($LASTEXITCODE -ne 0 -or ($version -join "`n") -notmatch '^OctetLedger\s+') {
+    # The selected previous binary passed version and database compatibility validation.
+    Unblock-File -LiteralPath $installedExecutable
+    $version = Invoke-OctetLedgerExecutable $installedExecutable @('version') $ExecutableTimeoutSeconds
+    if ($version.Output -notmatch '^OctetLedger\s+') {
         throw 'The previous executable failed validation after replacement.'
     }
-    & $installedExecutable collector install
-    if ($LASTEXITCODE -ne 0) { throw 'The previous version could not reinstall its collector.' }
+    Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'install') $ExecutableTimeoutSeconds | Out-Null
     Remove-Item -LiteralPath $failedExecutable -Force -ErrorAction SilentlyContinue
-    Write-Host "Rollback complete: $($version -join ' ')"
+    Write-Host "Rollback complete: $($version.Output.Trim())"
 }
 catch {
+    $failure = $_
     if ($replacementMade -and (Test-Path -LiteralPath $failedExecutable)) {
-        try { & $installedExecutable collector stop 2>$null | Out-Null } catch {}
+        try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'stop') $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not stop the failed rollback: $_" }
         try {
             [System.IO.File]::Replace($failedExecutable, $installedExecutable, $previousExecutable, $true)
+            Unblock-File -LiteralPath $installedExecutable
         }
         catch {
             Write-Warning "Could not restore the current version. Its executable backup is retained at: $failedExecutable"
@@ -78,9 +89,8 @@ catch {
         }
     }
     try {
-        & $installedExecutable collector install 2>$null | Out-Null
-        if ($LASTEXITCODE -ne 0) { Write-Warning 'The current version was preserved, but its collector could not be restarted.' }
+        Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'install') $ExecutableTimeoutSeconds | Out-Null
     }
     catch { Write-Warning "The current version was preserved, but its collector could not be restarted: $_" }
-    throw
+    throw $failure
 }
