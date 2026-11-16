@@ -78,20 +78,22 @@ internal static class ApplicationTrafficCommand
                 _ => received ? new Counters(size, 0) : new Counters(0, size),
                 (_, current) => received ? current with { Received = current.Received + size } : current with { Sent = current.Sent + size });
         }
-        session.Source.Kernel.ProcessStart += data => names[data.ProcessID] = NormalizeProcessName(data.ProcessName);
-        session.Source.Kernel.ProcessStop += data => names.TryRemove(data.ProcessID, out _);
-        session.Source.Kernel.TcpIpRecv += data => Add(data.ProcessID, data.size, true);
-        session.Source.Kernel.TcpIpSend += data => Add(data.ProcessID, data.size, false);
-        session.Source.Kernel.UdpIpRecv += data => Add(data.ProcessID, data.size, true);
-        session.Source.Kernel.UdpIpSend += data => Add(data.ProcessID, data.size, false);
-        session.Source.Kernel.TcpIpRecvIPV6 += data => Add(data.ProcessID, data.size, true);
-        session.Source.Kernel.TcpIpSendIPV6 += data => Add(data.ProcessID, data.size, false);
-        session.Source.Kernel.UdpIpRecvIPV6 += data => Add(data.ProcessID, data.size, true);
-        session.Source.Kernel.UdpIpSendIPV6 += data => Add(data.ProcessID, data.size, false);
+        // Accessing Source can start the session, so enable the kernel provider first.
         session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP | KernelTraceEventParser.Keywords.Process);
+        var source = session.Source;
+        source.Kernel.ProcessStart += data => names[data.ProcessID] = NormalizeProcessName(data.ProcessName);
+        source.Kernel.ProcessStop += data => names.TryRemove(data.ProcessID, out _);
+        source.Kernel.TcpIpRecv += data => Add(data.ProcessID, data.size, true);
+        source.Kernel.TcpIpSend += data => Add(data.ProcessID, data.size, false);
+        source.Kernel.UdpIpRecv += data => Add(data.ProcessID, data.size, true);
+        source.Kernel.UdpIpSend += data => Add(data.ProcessID, data.size, false);
+        source.Kernel.TcpIpRecvIPV6 += data => Add(data.ProcessID, data.size, true);
+        source.Kernel.TcpIpSendIPV6 += data => Add(data.ProcessID, data.size, false);
+        source.Kernel.UdpIpRecvIPV6 += data => Add(data.ProcessID, data.size, true);
+        source.Kernel.UdpIpSendIPV6 += data => Add(data.ProcessID, data.size, false);
         Console.WriteLine($"Capturing estimated per-application payload bytes for up to {seconds} seconds. Press Ctrl+C to stop.");
         Console.WriteLine("Only this explicit monitoring window is recorded; totals may differ from interface counters.");
-        var processing = Task.Run(() => session.Source.Process());
+        var processing = Task.Run(() => source.Process());
         using var cancellation = new CancellationTokenSource();
         ConsoleCancelEventHandler cancel = (_, eventArgs) =>
         {

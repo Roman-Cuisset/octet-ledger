@@ -84,7 +84,7 @@ try {
         if ($totalsExit -ne 0 -or $totals.bytesReceived -le 0 -or $totals.bytesSent -le 0) {
             throw "No bidirectional $transport IPv6 ETW bytes were stored for the isolated probe. Loopback sockets alone are not a pass; this Windows ETW configuration may not emit the required events."
         }
-        $visible = (& $exe apps top --count 10000 --data-dir $data) -join "`n"
+        $visible = (& $exe apps top --count 100 --data-dir $data) -join "`n"
         if ($LASTEXITCODE -ne 0 -or $visible -notmatch '(?m)^OctetLedger\.IPv6Probe\.exe\s') {
             throw "The captured $transport IPv6 probe was not visible in the production application report."
         }
