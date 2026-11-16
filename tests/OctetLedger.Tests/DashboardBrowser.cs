@@ -110,10 +110,19 @@ internal static class DashboardBrowser
     {
         var configured = Environment.GetEnvironmentVariable("OCTETLEDGER_TEST_BROWSER");
         if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured)) return configured;
-        var edge = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe");
-        if (File.Exists(edge)) return edge;
-        edge = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe");
-        if (File.Exists(edge)) return edge;
-        throw new FileNotFoundException("Dashboard tests require Microsoft Edge or OCTETLEDGER_TEST_BROWSER pointing to a Chromium browser.");
+
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        foreach (var path in new[]
+        {
+            Path.Combine(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+            Path.Combine(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+            Path.Combine(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+            Path.Combine(programFiles, "Microsoft", "Edge", "Application", "msedge.exe")
+        })
+        {
+            if (File.Exists(path)) return path;
+        }
+        throw new FileNotFoundException("Dashboard tests require Google Chrome, Microsoft Edge, or OCTETLEDGER_TEST_BROWSER pointing to a Chromium browser.");
     }
 }

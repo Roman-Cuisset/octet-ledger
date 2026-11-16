@@ -116,6 +116,10 @@ jobs:
             throw "Expected ${{ matrix.architecture }} runner, got $env:RUNNER_ARCH."
           }
 
+      - name: Test on native architecture
+        shell: pwsh
+        run: dotnet test --configuration Release --nologo
+
       - name: Build installation package
         shell: pwsh
         run: .\scripts\package.ps1 -Version $env:GITHUB_REF_NAME.TrimStart('v') -Runtime '${{ matrix.runtime }}'

@@ -79,6 +79,12 @@ jobs:
       - name: Restore
         run: dotnet restore
 
+      - name: Test on native ARM64
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_ARCH -ne 'ARM64') { throw "Expected an ARM64 runner, got $env:RUNNER_ARCH." }
+          dotnet test --configuration Release --nologo
+
       - name: Publish native ARM64 executable
         run: >-
           dotnet publish src/OctetLedger.Cli/OctetLedger.Cli.csproj
