@@ -333,8 +333,19 @@ public sealed partial class TrafficStore : IDisposable
             if (!copiedCheck.IsHealthy)
                 throw new InvalidDataException($"Copied restore database failed SQLite integrity check: {string.Join("; ", copiedCheck.Messages)}");
 
-            if (previous is null) File.Move(temporary, destination);
-            else File.Replace(temporary, destination, previous, ignoreMetadataErrors: true);
+            if (previous is null)
+            {
+                // Without the original main file, its sidecars cannot be safely recovered.
+                if (File.Exists(destination + "-wal") || File.Exists(destination + "-shm") || File.Exists(destination + "-journal"))
+                    throw new IOException("The destination database is missing but its SQLite journal files are still present. No files were replaced.");
+                File.Move(temporary, destination);
+            }
+            else
+            {
+                // On Windows, deny data handles while allowing the atomic rename.
+                using var destinationGuard = LockRestoreDestination(destination);
+                File.Replace(temporary, destination, previous, ignoreMetadataErrors: true);
+            }
             return new DatabaseRestoreResult(destination, previous);
         }
         finally
@@ -342,6 +353,60 @@ public sealed partial class TrafficStore : IDisposable
             try { if (File.Exists(temporary)) File.Delete(temporary); }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    private static FileStream LockRestoreDestination(string path)
+    {
+        static FileStream OpenGuard(string databasePath)
+        {
+            try { return File.Open(databasePath, FileMode.Open, FileAccess.ReadWrite, FileShare.Delete); }
+            catch (IOException exception)
+            {
+                throw new IOException("The destination database is in use. Close database clients or stop portable monitors and retry restoration; the database was not replaced.", exception);
+            }
+        }
+
+        static bool HasData(string file) => File.Exists(file) && new FileInfo(file).Length > 0;
+
+        var guard = OpenGuard(path);
+        try
+        {
+            if (HasData(path + "-wal") || HasData(path + "-journal"))
+            {
+                guard.Dispose();
+                // Recover committed WAL pages / hot rollback journals with SQLite itself, never by
+                // moving only the main file. No schema initialization or migration is performed here.
+                using (var recovery = new SqliteConnection(new SqliteConnectionStringBuilder
+                {
+                    DataSource = path,
+                    Mode = SqliteOpenMode.ReadWrite,
+                    Cache = SqliteCacheMode.Private,
+                    Pooling = false,
+                    DefaultTimeout = 5
+                }.ToString()))
+                {
+                    recovery.Open();
+                    using var command = recovery.CreateCommand();
+                    command.CommandText = "PRAGMA schema_version;";
+                    command.ExecuteScalar();
+                    command.CommandText = "PRAGMA journal_mode=DELETE;";
+                    if (!string.Equals(command.ExecuteScalar() as string, "delete", StringComparison.OrdinalIgnoreCase))
+                        throw new IOException("The destination database journals could not be checkpointed. The database was not replaced.");
+                }
+                guard = OpenGuard(path);
+            }
+            if (HasData(path + "-wal") || HasData(path + "-journal"))
+                throw new IOException("The destination database has pending journal data. The database was not replaced.");
+            File.Delete(path + "-wal");
+            File.Delete(path + "-shm");
+            File.Delete(path + "-journal");
+            return guard;
+        }
+        catch
+        {
+            guard.Dispose();
+            throw;
         }
     }
 
