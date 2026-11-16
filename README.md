@@ -48,6 +48,11 @@ needs no administrator privileges, adds `octetledger` to the user PATH, and star
 collector every 60 seconds. A hidden per-user Windows scheduled task checks the collector every minute
 and at logon, independently of its startup launcher.
 
+Windows may show a security warning when you first run `install.cmd` from a downloaded ZIP.
+After validating the executable, installation and rollback remove the Internet-origin mark from
+the installed `octetledger.exe`. The downloaded files keep their marks, and Windows security
+policies still apply.
+
 Once the WinGet package is accepted, these commands will also work:
 
 ```powershell
@@ -254,6 +259,10 @@ and size limit, verifies its published SHA-256 checksum, rejects unsafe archive 
 the downloaded executable version, and then delegates replacement to the rollback-capable
 installer. The previous executable is retained for `octetledger update rollback`.
 
+The PowerShell installation and rollback scripts allow 60 seconds for each executable call.
+When running `install.ps1` or the installed `rollback.ps1` directly, use
+`-ExecutableTimeoutSeconds` to set a limit between 1 and 300 seconds.
+
 Interactive `summary` and `status` commands check at most once every 24 hours and print a short
 notice when a newer version exists. Failed offline attempts are throttled too. Automatic checks
 use a two-second timeout, never make the local command fail, and never download or install
@@ -273,9 +282,13 @@ octetledger database import D:\Backups\octetledger.db
 `database auto-backup enable` creates at most one backup per day in the data directory and keeps
 the seven newest backups. Import checks the source database, stops the installed collector when
 necessary, replaces the active database atomically, preserves the previous database beside it as
-`octetledger.before-restore-YYYYMMDD-HHMMSS-ID.db`, and restarts the collector. Do not copy the
-live database manually. Schema changes are transactional, versioned with SQLite `user_version`, and
-identified as OctetLedger data with SQLite `application_id`; migrations are covered by tests.
+`octetledger.before-restore-YYYYMMDD-HHMMSS-ID.db`, and restarts the collector. Close any dashboard
+or portable monitor that still holds the destination open before retrying a refused import. A
+journal left by an interrupted process is recovered before the previous database is saved.
+If only journal files remain, import refuses to overwrite them or create a new database beside
+them. Do not copy the live database manually. Schema changes are transactional, versioned with SQLite
+`user_version`, and identified as OctetLedger data with SQLite `application_id`. The test suite
+covers migrations.
 
 ## Build from source
 
@@ -290,13 +303,13 @@ dotnet publish src/OctetLedger.Cli --configuration Release --runtime win-x64 `
   -p:DebugType=None --output artifacts/win-x64
 ```
 
-The test suite includes dashboard security and chart regressions executed in headless Microsoft Edge.
-Install Edge in its standard Windows location, or set `OCTETLEDGER_TEST_BROWSER` to a
-Chromium-based browser executable. No browser package or external service is required.
+Dashboard security and chart tests run in a headless browser. They look for Google Chrome and then
+Microsoft Edge in the standard Windows installation directories. Set `OCTETLEDGER_TEST_BROWSER`
+to select another Chromium-based executable.
 
-Releases contain self-contained single-file executables for Windows x64 and ARM64. CI executes both
-binaries on native GitHub-hosted Windows runners. The x64 job also exercises installation, update,
-rejection of a bad update, collector crash recovery, rollback, and uninstallation.
+Releases contain self-contained single-file executables for Windows x64 and ARM64. CI runs the test
+suite and exercises installation, update, rejection of a bad update, collector crash recovery,
+rollback, and uninstallation on native GitHub-hosted runners for both architectures.
 
 Release signing is enabled automatically when the repository secrets
 `WINDOWS_SIGNING_CERTIFICATE_BASE64` and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` contain a real

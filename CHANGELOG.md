@@ -38,6 +38,16 @@
 - Match virtual-driver markers on term boundaries, replace the overly broad `WAN`/`Miniport` exclusions with `WAN Miniport`, and retain detection of known virtual/tunnel drivers.
 - Preserve explicit preferences and interface selectors, the single-interface fallback, and unfiltered `--all` reports without rewriting stored interface metadata.
 
+### Installation, rollback, and database restore
+
+- Set a configurable deadline for executable calls during installation and rollback, including recovery calls. Package the shared PowerShell process helper for both architectures.
+- Remove the Internet-origin mark from the installed executable after validation while preserving the mark on downloaded files and other named streams.
+- Refuse SQLite restores while a client holds the destination open or when journal files remain without the original database. Recover journals left by an interrupted process before preserving the previous database and replacing it.
+- Exercise timeouts, rejected updates and rollbacks, and preservation of installed files, settings, and statistics in the Windows lifecycle test.
+- Run the .NET test suite on native Windows x64 and ARM64 in the release workflow. Use the supported `apps top --count 100` in live IPv6 validation.
+- Start the kernel ETW provider before opening the application traffic event source so `apps monitor` can capture TCP and UDP traffic.
+- Prefer installed Chrome for dashboard browser tests and use Edge when Chrome is unavailable.
+
 ## 0.10.1
 
 ### Virtual adapter filtering & documentation
