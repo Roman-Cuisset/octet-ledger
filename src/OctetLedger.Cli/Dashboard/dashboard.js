@@ -17,11 +17,130 @@ function addTimelineItem(target,start,end,description,className=''){
   el(target).append(li);
 }
 
-let chartState = { mode: 'stacked', data: null };
+const chartState = { mode: 'stacked', data: null, focusIndex: 0, tipTarget: null };
+const chartTip = el('chart-tip');
+
+function dayDetails(d) {
+  const { recvD, sentD, totD, today, peakPeriod } = chartState.data;
+  const received = recvD.get(d.period) ?? 0, sent = sentD.get(d.period) ?? 0;
+  const total = received + sent;
+  const measurement = !totD.has(d.period) ? 'No measurement in selected scope' :
+    total === 0 ? 'Measured 0 bytes traffic' : null;
+  const badges = [];
+  if (d.period === today) badges.push('Today');
+  if (d.period === peakPeriod && total > 0) badges.push('Peak');
+  const observations = `${d.observations} collector observation(s)`;
+  const warnings = [];
+  if (d.hasCollectorGap) warnings.push('Collection interruption recorded');
+  if (d.hasInterfaceGap) warnings.push('Interface interruption in selected scope');
+  const coverage = d.hasUnknownCoverage ? 'Coverage unknown for part of this day' : null;
+  return { received, sent, total, measurement, badges, observations, warnings, coverage };
+}
+
+function chartTipElement(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function showChartTip(hit, day, details) {
+  const { received, sent, total, measurement, badges, observations, warnings, coverage } = details;
+  const header = chartTipElement('div', 'tip-hdr');
+  header.append(chartTipElement('span', '', day.period));
+  for (const badge of badges) header.append(chartTipElement('span', 'tip-badge ' + badge.toLowerCase(), badge));
+  chartTip.replaceChildren(header);
+  if (measurement) {
+    chartTip.append(chartTipElement('div', 'tip-row tip-muted', measurement));
+  } else {
+    for (const [label, amount, marker] of [['Download', received, 'download-marker'], ['Upload', sent, 'upload-marker']]) {
+      const row = chartTipElement('div', 'tip-row');
+      const labelNode = chartTipElement('span', '');
+      labelNode.append(chartTipElement('i', 'c-dot ' + marker), label);
+      row.append(labelNode, chartTipElement('b', '', F(amount)),
+        chartTipElement('span', 'tip-pct', Math.round(amount / total * 100) + '%'));
+      chartTip.append(row);
+    }
+    const sum = chartTipElement('div', 'tip-row total');
+    sum.append(chartTipElement('span', '', 'Total'), chartTipElement('b', '', F(total)));
+    chartTip.append(sum);
+  }
+  chartTip.append(chartTipElement('div', 'tip-row tip-muted tip-observations', observations));
+  for (const warning of warnings) chartTip.append(chartTipElement('div', 'tip-warn', '⚠️ ' + warning));
+  if (coverage) chartTip.append(chartTipElement('div', 'tip-row tip-muted', coverage));
+  chartState.tipTarget = hit;
+  chartTip.hidden = false;
+  positionChartTip();
+}
+
+function hideChartTip() {
+  chartState.tipTarget = null;
+  chartTip.hidden = true;
+}
+
+function positionChartTip() {
+  if (!chartState.tipTarget) return;
+  const wrap = el('ch-wrap').getBoundingClientRect();
+  const hit = chartState.tipTarget.getBoundingClientRect();
+  const width = chartTip.offsetWidth;
+  const center = (hit.left + hit.right) / 2 - wrap.left;
+  chartTip.style.left = Math.max(4, Math.min(center - width / 2, wrap.width - width - 4)) + 'px';
+}
+
+function setupChartDays(hits, calendar) {
+  hits.forEach((hit, index) => {
+    const day = calendar[index], details = dayDetails(day);
+    const { received, sent, total, measurement, badges, observations, warnings, coverage } = details;
+    hit.setAttribute('aria-label', [day.period, ...badges,
+      measurement ?? `Download ${F(received)}, upload ${F(sent)}, total ${F(total)}`,
+      observations, ...warnings, coverage].filter(Boolean).join('. '));
+
+    const show = () => showChartTip(hit, day, details);
+    const hideIfOutside = event => {
+      if (chartState.tipTarget === hit && !chartTip.contains(event.relatedTarget) &&
+          document.activeElement !== hit && !hit.matches(':hover') && !chartTip.matches(':hover')) hideChartTip();
+    };
+    hit.addEventListener('mouseenter', show);
+    hit.addEventListener('mouseleave', hideIfOutside);
+    hit.addEventListener('focus', () => {
+      hits[chartState.focusIndex]?.setAttribute('tabindex', '-1');
+      hit.setAttribute('tabindex', '0');
+      chartState.focusIndex = index;
+      show();
+    });
+    hit.addEventListener('blur', hideIfOutside);
+    hit.addEventListener('click', () => {
+      hit.focus();
+      show();
+    });
+    hit.addEventListener('keydown', event => {
+      let next = index;
+      switch (event.key) {
+        case 'ArrowLeft': next = Math.max(0, index - 1); break;
+        case 'ArrowRight': next = Math.min(hits.length - 1, index + 1); break;
+        case 'Home': next = 0; break;
+        case 'End': next = hits.length - 1; break;
+        case 'Enter': case ' ': show(); break;
+        default: return;
+      }
+      event.preventDefault();
+      if (next !== index) hits[next].focus();
+    });
+  });
+}
+
+chartTip.addEventListener('mouseleave', () => {
+  if (chartState.tipTarget !== document.activeElement) hideChartTip();
+});
+el('chart-scroll').addEventListener('scroll', positionChartTip);
+window.addEventListener('resize', positionChartTip);
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !chartTip.hidden) hideChartTip();
+});
 
 function renderSvgChart() {
   if (!chartState.data) return;
-  const { calendar, recvD, sentD, totD, today, mx, peakPeriod } = chartState.data;
+  const { calendar, recvD, sentD, totD, today, mx } = chartState.data;
   const mode = chartState.mode;
   const leftX = 66, rightX = 944, topY = 22, botY = 220, chartH = botY - topY, w = rightX - leftX;
   const n = calendar.length, step = w / n;
@@ -34,7 +153,7 @@ function renderSvgChart() {
     const y = botY - frac * chartH;
     const val = frac * mx;
     gridHtml += `<line x1="${leftX}" y1="${y}" x2="${rightX}" y2="${y}" stroke="${i===0?'#384457':'#212c3d'}" ${i>0?'stroke-dasharray="4,4"':''} stroke-width="${i===0?'1.5':'1'}"/>`;
-    gridHtml += `<text x="${leftX - 8}" y="${y + 3.5}" text-anchor="end" fill="var(--mt)" font-size="10" font-family="system-ui">${F(val)}</text>`;
+    gridHtml += `<text class="axis-label" x="${leftX - 8}" y="${y + 3.5}" text-anchor="end" fill="var(--mt)" font-size="10" font-family="system-ui">${F(val)}</text>`;
   }
   gridG.innerHTML = gridHtml;
 
@@ -92,7 +211,6 @@ function renderSvgChart() {
       const rH = Math.max(0, (rv / mx) * chartH);
       const sH = Math.max(0, (sv / mx) * chartH);
       if (has && tot > 0) {
-        const topH = sH > 0 ? sH : rH;
         if (rH > 0) {
           const rxB = sH > 0 ? 0 : 3;
           barsHtml += `<rect x="${bx}" y="${botY - rH}" width="${bw}" height="${rH}" fill="url(#g-dl)" rx="${rxB}" opacity="${isToday?0.75:1}"/>`;
@@ -132,69 +250,22 @@ function renderSvgChart() {
     }
 
     // Date label
-    const dayNum = p.slice(8);
+    const dayNum = String(Number(p.slice(8))).padStart(2, '0');
     const lblColor = isToday ? 'var(--blue)' : 'var(--mt)';
     const lblWeight = isToday ? '700' : '400';
-    barsHtml += `<text x="${cx}" y="${botY + 22}" text-anchor="middle" fill="${lblColor}" font-weight="${lblWeight}" font-size="9.5" font-family="system-ui">${dayNum}</text>`;
+    barsHtml += `<text class="axis-label" x="${cx}" y="${botY + 22}" text-anchor="middle" fill="${lblColor}" font-weight="${lblWeight}" font-size="9.5" font-family="system-ui">${dayNum}</text>`;
 
     // Interactive hover zone
-    hitsHtml += `<rect x="${leftX + i * step}" y="${topY - 6}" width="${step}" height="${chartH + 34}" class="col-hit" data-idx="${i}"/>`;
+    hitsHtml += `<rect x="${leftX + i * step}" y="${topY - 6}" width="${step}" height="${chartH + 34}" class="col-hit" role="button" tabindex="${i === chartState.focusIndex ? 0 : -1}"/>`;
   });
 
+  const restoreFocus = hitsG.contains(document.activeElement);
+  hideChartTip();
   barsG.innerHTML = barsHtml;
   hitsG.innerHTML = hitsHtml;
-
-  // Setup hover listeners
-  const wrap = el('ch-wrap');
-  const tip = el('chart-tip');
   const hits = hitsG.querySelectorAll('.col-hit');
-
-  hits.forEach(hit => {
-    hit.addEventListener('mouseenter', e => {
-      const i = parseInt(hit.getAttribute('data-idx'));
-      const d = calendar[i], p = d.period;
-      const rv = recvD.get(p) ?? 0, sv = sentD.get(p) ?? 0, tot = rv + sv;
-      const has = totD.has(p);
-      const isToday = p === today;
-      const isPeak = p === peakPeriod && tot > 0;
-      const pctDl = tot > 0 ? Math.round(rv / tot * 100) : 0;
-      const pctUl = tot > 0 ? Math.round(sv / tot * 100) : 0;
-
-      let tipHtml = `<div class="tip-hdr"><span>${p}</span>`;
-      if (isToday) tipHtml += `<span class="tip-badge today">Today</span>`;
-      if (isPeak) tipHtml += `<span class="tip-badge peak">Peak</span>`;
-      tipHtml += `</div>`;
-
-      if (has && tot > 0) {
-        tipHtml += `<div class="tip-row"><span><i class="c-dot download-marker"></i>Download</span><b>${F(rv)}</b><span class="tip-pct">${pctDl}%</span></div>`;
-        tipHtml += `<div class="tip-row"><span><i class="c-dot upload-marker"></i>Upload</span><b>${F(sv)}</b><span class="tip-pct">${pctUl}%</span></div>`;
-        tipHtml += `<div class="tip-row total"><span>Total</span><b>${F(tot)}</b></div>`;
-      } else if (!has) {
-        tipHtml += `<div class="tip-row tip-muted"><i>No measurement in selected scope</i></div>`;
-      } else {
-        tipHtml += `<div class="tip-row tip-muted"><i>Measured 0 bytes traffic</i></div>`;
-      }
-
-      tipHtml += `<div class="tip-row tip-muted tip-observations">${d.observations} collector observation(s)</div>`;
-      if (d.hasCollectorGap) tipHtml += `<div class="tip-warn">⚠️ Collection interruption recorded</div>`;
-      if (d.hasInterfaceGap) tipHtml += `<div class="tip-warn">⚠️ Interface interruption in selected scope</div>`;
-      if (d.hasUnknownCoverage) tipHtml += `<div class="tip-row tip-muted">Coverage unknown for part of this day</div>`;
-
-      tip.innerHTML = tipHtml;
-      tip.classList.add('visible');
-
-      // Position tip
-      const wrapRect = wrap.getBoundingClientRect();
-      const colCenterRel = (leftX + i * step + step / 2) / 960 * wrapRect.width;
-      const tipW = 200;
-      const tipX = Math.max(10, Math.min(colCenterRel - tipW / 2, wrapRect.width - tipW - 10));
-      tip.style.left = tipX + 'px';
-    });
-
-    hit.addEventListener('mouseleave', () => {
-      tip.classList.remove('visible');
-    });
-  });
+  setupChartDays(hits, calendar);
+  if (restoreFocus) hits[chartState.focusIndex]?.focus();
 }
 
 fetch('/api/data').then(async r=>{if(!r.ok)throw new Error(await r.text());return r.json()}).then(d=>{
@@ -252,8 +323,10 @@ fetch('/api/data').then(async r=>{if(!r.ok)throw new Error(await r.text());retur
   // Toggle buttons
   document.querySelectorAll('.tbtn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.tbtn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
+      document.querySelectorAll('.tbtn').forEach(button => {
+        button.classList.toggle('active', button === btn);
+        button.setAttribute('aria-pressed', String(button === btn));
+      });
       chartState.mode = btn.getAttribute('data-mode');
       renderSvgChart();
     });

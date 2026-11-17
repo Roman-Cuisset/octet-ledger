@@ -37,6 +37,11 @@ public class DashboardSecurityTests
             check(document.querySelector('#meta').textContent.includes(expected.name),'scope text');
             check(!document.querySelector('#gaps img,#gaps svg,#events img,#events svg'),'injected element');
             check(!document.body.dataset.injected,'executed handler');
+            check(getComputedStyle(document.body).backgroundColor==='rgb(13, 17, 23)','embedded stylesheet blocked');
+            const inline = document.createElement('script');
+            inline.textContent = 'document.body.dataset.inlineScriptExecuted = 1';
+            document.body.append(inline);
+            check(!document.body.dataset.inlineScriptExecuted,'CSP allowed inline script');
             """);
     }
 }

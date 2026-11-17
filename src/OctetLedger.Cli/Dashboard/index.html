@@ -8,12 +8,13 @@
 </head>
 <body>
 
-<div class="hdr">
+<header class="hdr">
   <h1>OctetLedger</h1>
   <span class="sub">Local network usage · last 30 days</span>
-</div>
+</header>
+<main>
 <div class="sbar">
-  <span class="dot" id="dot"></span>
+  <span class="dot" id="dot" aria-hidden="true"></span>
   <span id="state">Loading…</span>
   <span class="sep">·</span>
   <span id="lastin">—</span>
@@ -33,15 +34,18 @@
       <div class="ch-title">Network Traffic</div>
       <div class="ch-sub" id="ch-sub">Last 30 calendar days</div>
     </div>
-    <div class="ch-toggles">
-      <button class="tbtn active" data-mode="stacked" id="btn-stacked">Stacked</button>
-      <button class="tbtn" data-mode="grouped" id="btn-grouped">Side-by-side</button>
-      <button class="tbtn" data-mode="area" id="btn-area">Trend</button>
+    <div class="ch-toggles" role="group" aria-label="Chart mode">
+      <button type="button" class="tbtn active" data-mode="stacked" id="btn-stacked" aria-pressed="true">Stacked</button>
+      <button type="button" class="tbtn" data-mode="grouped" id="btn-grouped" aria-pressed="false">Side-by-side</button>
+      <button type="button" class="tbtn" data-mode="area" id="btn-area" aria-pressed="false">Trend</button>
     </div>
   </div>
   <div class="ch-pills" id="ch-pills"></div>
   <div class="ch-svg-wrap" id="ch-wrap">
-    <svg id="chart-svg" viewBox="0 0 960 270" preserveAspectRatio="none">
+    <div class="chart-scroll" id="chart-scroll">
+    <svg id="chart-svg" viewBox="0 0 960 270" preserveAspectRatio="none" role="group" aria-labelledby="chart-label" aria-describedby="chart-help">
+      <title id="chart-label">Daily download and upload traffic</title>
+      <desc id="chart-help">Use the left and right arrow keys to move between days, Home or End to jump, and Escape to close the tooltip.</desc>
       <defs>
         <linearGradient id="g-dl" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stop-color="#38bdf8"/>
@@ -63,11 +67,12 @@
           <line x1="0" y1="0" x2="0" y2="6" stroke="#484f58" stroke-width="1.5"/>
         </pattern>
       </defs>
-      <g id="svg-grid"></g>
-      <g id="svg-bars"></g>
+      <g id="svg-grid" aria-hidden="true"></g>
+      <g id="svg-bars" aria-hidden="true"></g>
       <g id="svg-hits"></g>
     </svg>
-    <div id="chart-tip" class="c-tip"></div>
+    </div>
+    <div id="chart-tip" class="c-tip" aria-hidden="true" hidden></div>
   </div>
   <div class="lgd">
     <span><i class="download-marker"></i> Download</span>
@@ -78,8 +83,8 @@
   </div>
 </div>
 
-<h2>Daily breakdown</h2>
-<div class="scr"><table><thead><tr>
+<h2 id="daily-heading">Daily breakdown</h2>
+<div class="scr" role="region" aria-labelledby="daily-heading" tabindex="0"><table><thead><tr>
   <th>Day</th><th>Interface</th><th class="n">Download</th><th class="n">Upload</th><th class="n">Total</th><th>Precision</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 
@@ -89,9 +94,9 @@
 </details>
 
 <details>
-  <summary>Collection observations<span class="cnt" id="ocnt"></span></summary>
+  <summary><span id="coverage-heading">Collection observations</span><span class="cnt" id="ocnt"></span></summary>
   <div class="inn">
-    <div class="scr"><table><thead><tr>
+    <div class="scr" role="region" aria-labelledby="coverage-heading" tabindex="0"><table><thead><tr>
       <th>Day</th><th class="n">Observations</th><th class="n">Measured</th><th class="n">Zero-byte</th><th class="n">No active iface</th>
     </tr></thead><tbody id="coverage"></tbody></table></div>
   </div>
@@ -111,5 +116,6 @@
   </div>
 </details>
 
-<div class="ft" id="ft">OctetLedger · 127.0.0.1</div>
+</main>
+<footer class="ft" id="ft">OctetLedger · 127.0.0.1</footer>
 </body></html>

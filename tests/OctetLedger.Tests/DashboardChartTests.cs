@@ -94,6 +94,51 @@ public class DashboardChartTests
             """);
     }
 
+    [Fact]
+    public async Task ChartIsKeyboardOperableAndStaysWithinANarrowLayout()
+    {
+        long?[] received = Enumerable.Range(0, 30).Select(i => i == 0 ? (long?)null : i * 1000).ToArray();
+        await DashboardBrowser.VerifyAsync(Payload(received, received), """
+            const tip = document.querySelector('#chart-tip');
+            const hits = () => [...document.querySelectorAll('.col-hit')];
+            const key = (target, value) => target.dispatchEvent(new KeyboardEvent('keydown', {key:value,bubbles:true,cancelable:true}));
+            check(document.querySelector('#chart-svg title').textContent.includes('download'),'chart accessible name');
+            check(hits().filter(hit=>hit.getAttribute('tabindex')==='0').length===1,'one chart tab stop');
+            hits()[0].focus();
+            check(hits()[0].getAttribute('aria-label').includes('No measurement')&&!tip.hidden,'focus and accessible day label');
+            key(hits()[0],'ArrowRight');
+            check(document.activeElement===hits()[1]&&hits()[0].getAttribute('tabindex')==='-1','arrow navigation');
+            check(!tip.hidden&&tip.textContent.includes('Download'),'keyboard tooltip');
+            key(hits()[1],'Escape');
+            check(tip.hidden&&document.activeElement===hits()[1],'Escape dismisses without moving focus');
+            key(hits()[1],'Enter');
+            check(!tip.hidden,'Enter reopens the tooltip');
+            document.querySelector('[data-mode="area"]').click();
+            check(document.activeElement===hits()[1],'changing mode preserves chart focus');
+            check(document.querySelector('[data-mode="area"]').getAttribute('aria-pressed')==='true'&&
+                  document.querySelectorAll('.tbtn[aria-pressed="true"]').length===1,'selected mode announced');
+
+            // Headless Chromium may clamp the outer window size. Keep the mobile media rules and narrow the page itself.
+            check(matchMedia('(max-width: 640px)').matches,'mobile media query');
+            document.documentElement.style.maxWidth='320px';
+            const scroll = document.querySelector('#chart-scroll');
+            const frame = document.querySelector('#ch-wrap');
+            check(scroll.scrollWidth>scroll.clientWidth&&document.body.scrollWidth<=document.body.clientWidth,'chart scrolls inside the page');
+            key(hits()[1],'End');
+            check(document.activeElement===hits()[29]&&scroll.scrollLeft>0,'last day scrolls into view');
+            const bounds=tip.getBoundingClientRect(), wrapper=frame.getBoundingClientRect();
+            check(bounds.left>=wrapper.left&&bounds.right<=wrapper.right,'tooltip remains inside a narrow chart');
+            key(hits()[29],'Home');
+            check(document.activeElement===hits()[0],'Home returns to first day');
+            document.querySelector('.scr').focus();
+            hits()[0].dispatchEvent(new MouseEvent('mouseenter'));
+            hits()[0].dispatchEvent(new MouseEvent('mouseleave',{relatedTarget:tip}));
+            check(!tip.hidden,'pointer can enter tooltip');
+            key(document.activeElement,'Escape');
+            check(tip.hidden,'Escape dismisses a hover tooltip');
+            """, viewportWidth: 520);
+    }
+
     private static object Payload(long?[] received, long?[] sent, int[]? observations = null)
     {
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);

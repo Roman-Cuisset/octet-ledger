@@ -9,7 +9,7 @@ namespace OctetLedger.Tests;
 
 internal static class DashboardBrowser
 {
-    internal static async Task VerifyAsync(object payload, string assertions)
+    internal static async Task VerifyAsync(object payload, string assertions, int viewportWidth = 1000)
     {
         var browserPath = FindBrowser();
         var verification = $$"""
@@ -52,7 +52,7 @@ internal static class DashboardBrowser
         {
             "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
             "--disable-background-networking", "--disable-extensions", "--dump-dom", "--virtual-time-budget=5000",
-            $"--user-data-dir={directory}", url
+            $"--user-data-dir={directory}", $"--window-size={viewportWidth},900", url
         }) browser.StartInfo.ArgumentList.Add(argument);
         var started = false;
         try
