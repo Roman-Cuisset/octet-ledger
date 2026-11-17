@@ -219,6 +219,9 @@ public sealed partial class TrafficStore
         return command;
     }
 
+    // Stored values use "O". Older imports may use a different ISO-8601 precision.
     private static DateTimeOffset ParseTimestamp(string timestamp) =>
-        DateTimeOffset.Parse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        DateTimeOffset.TryParseExact(timestamp, "O", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : DateTimeOffset.Parse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
 }

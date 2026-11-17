@@ -147,19 +147,27 @@ public sealed partial class TrafficStore : IDisposable
 
         using var reader = command.ExecuteReader();
         var buckets = new List<TrafficBucket>();
+        var adapters = new Dictionary<string, (string Name, string Description, string Type)>(StringComparer.Ordinal);
         while (reader.Read())
         {
+            var id = reader.GetString(0);
+            if (!adapters.TryGetValue(id, out var adapter))
+            {
+                // The metadata comes from the same adapter_state row throughout this query.
+                adapter = (reader.GetString(1), reader.GetString(8), reader.GetString(9));
+                adapters.Add(id, adapter);
+            }
             buckets.Add(new TrafficBucket(
-                reader.GetString(0),
-                reader.GetString(1),
-                DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                id,
+                adapter.Name,
+                ParseTimestamp(reader.GetString(2)),
                 reader.GetInt64(3),
                 reader.GetInt64(4),
                 reader.GetDouble(5),
                 reader.GetDouble(6),
                 reader.GetDouble(7),
-                reader.GetString(8),
-                reader.GetString(9),
+                adapter.Description,
+                adapter.Type,
                 reader.GetBoolean(10)));
         }
 
@@ -170,18 +178,22 @@ public sealed partial class TrafficStore : IDisposable
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            WITH all_traffic AS (
-                SELECT interface_id, minute_utc, bytes_received, bytes_sent, peak_bytes_per_second, longest_interval_seconds, 0 AS archived FROM traffic_minute
+            WITH traffic_totals AS (
+                SELECT interface_id, MIN(minute_utc) AS first_utc, SUM(bytes_received) AS received,
+                       SUM(bytes_sent) AS sent, MAX(peak_bytes_per_second) AS peak,
+                       MAX(longest_interval_seconds) AS longest, 0 AS archived
+                FROM traffic_minute GROUP BY interface_id
                 UNION ALL
-                SELECT interface_id, day_utc, bytes_received, bytes_sent, peak_bytes_per_second, longest_interval_seconds, 1 AS archived FROM traffic_archive_day
+                SELECT interface_id, MIN(day_utc), SUM(bytes_received), SUM(bytes_sent),
+                       MAX(peak_bytes_per_second), MAX(longest_interval_seconds), 1
+                FROM traffic_archive_day GROUP BY interface_id
             )
             SELECT b.interface_id, s.name,
-                   SUM(b.bytes_received), SUM(b.bytes_sent), MIN(b.minute_utc),
-                   MAX(b.peak_bytes_per_second), MAX(b.longest_interval_seconds),
+                   SUM(b.received), SUM(b.sent), MIN(b.first_utc), MAX(b.peak), MAX(b.longest),
                    s.description, s.type,
                    CASE WHEN MIN(b.archived) <> MAX(b.archived) THEN 'mixed'
                         WHEN MAX(b.archived) = 1 THEN 'daily_archives' ELSE 'raw_intervals' END
-            FROM all_traffic b
+            FROM traffic_totals b
             JOIN adapter_state s ON s.interface_id = b.interface_id
             GROUP BY b.interface_id, s.name, s.description, s.type
             ORDER BY s.name;
@@ -193,7 +205,7 @@ public sealed partial class TrafficStore : IDisposable
         {
             var received = reader.GetInt64(2);
             var sent = reader.GetInt64(3);
-            var firstMinute = DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+            var firstMinute = ParseTimestamp(reader.GetString(4));
             var elapsedSeconds = Math.Max(1, (nowUtc - firstMinute).TotalSeconds);
             rows.Add(new TrafficReportRow(
                 "all-time", reader.GetString(0), reader.GetString(1), received, sent,

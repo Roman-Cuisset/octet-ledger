@@ -107,6 +107,19 @@ public class TrafficReportTests
     }
 
     [Fact]
+    public void AutomaticSelectionUsesEachBucketsDriverIdentity()
+    {
+        var physical = new TrafficBucket("reused", "Adapter", DateTimeOffset.UtcNow, 100, 25,
+            InterfaceDescription: "Realtek PCIe", InterfaceType: "Ethernet");
+        var virtualBucket = physical with { InterfaceDescription = "Wintun Tunnel" };
+        var physicalAgain = physical with { MinuteUtc = physical.MinuteUtc.AddMinutes(-1) };
+
+        var selected = TrafficReport.SelectInterface([virtualBucket, physical, virtualBucket, physicalAgain], null, null);
+
+        Assert.Equal([physical, physicalAgain], selected);
+    }
+
+    [Fact]
     public void AutomaticRowFallbackKeepsAllPeriodsForTheBusiestInterface()
     {
         var rows = new[]

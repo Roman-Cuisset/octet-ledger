@@ -171,6 +171,49 @@ public class TrafficStoreTests
     }
 
     [Fact]
+    public void SqlTotalCombinesRawAndArchivedRowsAndReadsLegacyTimestamps()
+    {
+        var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(testDirectory, "test.db");
+        try
+        {
+            using var store = new TrafficStore(databasePath);
+            store.Collect([Snapshot(1_000, 2_000, 0)]);
+            store.Collect([Snapshot(7_000, 8_000, 10)]);
+            var raw = Assert.Single(store.ReadBuckets(DateTimeOffset.UnixEpoch));
+            var earliest = DateTimeOffset.UnixEpoch;
+            using (var writer = new SqliteConnection($"Data Source={databasePath};Pooling=False"))
+            {
+                writer.Open();
+                using var command = writer.CreateCommand();
+                command.CommandText = """
+                    INSERT INTO traffic_archive_day
+                    (interface_id, day_utc, bytes_received, bytes_sent, interval_seconds, peak_bytes_per_second, longest_interval_seconds)
+                    VALUES ($interface, $timestamp, 3000, 1000, 86400, 40, 1200);
+                    """;
+                command.Parameters.AddWithValue("$interface", raw.InterfaceId);
+                var legacyTimestamp = earliest.ToString("yyyy-MM-dd'T'HH:mm:sszzz", System.Globalization.CultureInfo.InvariantCulture);
+                command.Parameters.AddWithValue("$timestamp", legacyTimestamp);
+                command.ExecuteNonQuery();
+            }
+
+            var now = raw.MinuteUtc.AddHours(1);
+            var total = Assert.Single(store.ReadTotalReportRows(now));
+            Assert.Equal(9_000, total.BytesReceived);
+            Assert.Equal(7_000, total.BytesSent);
+            Assert.Equal(40, total.PeakBytesPerSecond);
+            Assert.Equal(1_200, total.LongestIntervalSeconds);
+            Assert.Equal("mixed", total.Precision);
+            Assert.Equal(16_000 / (now - earliest).TotalSeconds, total.AverageBytesPerSecond);
+            Assert.Equal(earliest, store.ReadBuckets(earliest.AddMinutes(-1)).Single(bucket => bucket.IsDailyArchive).MinuteUtc);
+        }
+        finally
+        {
+            if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void CollectionRemainsExactAcrossMultipleDaysAndASleepGap()
     {
         var testDirectory = Path.Combine(Path.GetTempPath(), $"octetledger-tests-{Guid.NewGuid():N}");

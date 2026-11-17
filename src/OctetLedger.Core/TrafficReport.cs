@@ -95,8 +95,18 @@ public static class TrafficReport
         if (values.Any(bucket => string.Equals(bucket.InterfaceId, preferredInterfaceId, StringComparison.OrdinalIgnoreCase)))
             return values.Where(bucket => string.Equals(bucket.InterfaceId, preferredInterfaceId, StringComparison.OrdinalIgnoreCase)).ToArray();
 
-        var physical = values.Where(bucket => NetworkInterfaceSelector.IsLikelyPhysical(
-            bucket.InterfaceName, bucket.InterfaceDescription, bucket.InterfaceType)).ToArray();
+        var classifications = new Dictionary<(string Name, string Description, string Type), bool>();
+        var physical = values.Where(bucket =>
+        {
+            var identity = (bucket.InterfaceName, bucket.InterfaceDescription, bucket.InterfaceType);
+            if (!classifications.TryGetValue(identity, out var isPhysical))
+            {
+                isPhysical = NetworkInterfaceSelector.IsLikelyPhysical(
+                    bucket.InterfaceName, bucket.InterfaceDescription, bucket.InterfaceType);
+                classifications.Add(identity, isPhysical);
+            }
+            return isPhysical;
+        }).ToArray();
         if (physical.Length > 0) return physical;
 
         var fallbackId = values.GroupBy(bucket => bucket.InterfaceId)
