@@ -194,6 +194,10 @@ daily archives remain measurements even when raw observation counts are unavaila
 and shaded areas stop at missing days, retain isolated measured points, and stay between adjacent
 measured values instead of overshooting below zero.
 
+Use Tab to reach the chart and the arrow keys to move between days. Home and End jump to the
+first and last days. Each day exposes its values and coverage, and Escape dismisses the tooltip.
+On narrow screens the chart and tables scroll within their own sections.
+
 Filled yellow markers indicate collection-wide interruptions; hollow yellow markers indicate an
 interruption affecting an interface in the displayed scope. Excluded virtual adapters do not raise
 chart warnings. Unknown coverage is labelled separately rather than blamed on the collector.
@@ -224,8 +228,10 @@ restart or a concurrent collector. Archiving, raw-row removal, and observation a
 together; an interrupted operation is retried without adding the same traffic twice. Historical
 daily totals remain available. Vacuuming is still an explicit command, not an automatic daily task.
 
-`dashboard` serves a read-only dashboard on `http://127.0.0.1:8765` and never binds to a network
-interface. `--data-dir` selects an isolated database and settings directory for portable use.
+`dashboard` serves a read-only dashboard on `http://127.0.0.1:8765`. Open the exact loopback URL
+printed by the command, including any custom port. The dashboard accepts GET and HEAD and serves
+its embedded HTML, CSS, and JavaScript locally. `--data-dir` selects an isolated database and
+settings directory for portable use.
 Portable data directories deliberately do not control the registered per-user collector: use
 explicit `collect` calls or keep `monitor` running with the same `--data-dir`.
 On Windows, the default data root honors a nonempty `LOCALAPPDATA` environment variable; registered

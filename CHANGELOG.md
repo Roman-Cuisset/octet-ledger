@@ -6,6 +6,7 @@
 
 - Render local interface names, interruption reasons, and collector event kinds as text in dashboard timelines instead of interpreting them as HTML.
 - Exercise hostile local data in a real Chromium browser regression test.
+- Require the advertised loopback authority, restrict the dashboard to GET and HEAD, and reject cross-origin browser requests. Apply a content security policy and serve HTML, CSS, and JavaScript as separate embedded assets.
 
 ### Statistics correctness
 
@@ -24,6 +25,11 @@
 - Distinguish collection-wide interruptions from selected-interface interruptions with filled and hollow markers, separate tooltip labels, and an explicit legend.
 - Ignore interruptions of excluded interfaces when marking the chart, while retaining them in the complete interruption timeline; honour explicit virtual-interface preferences.
 - Keep unknown coverage separate from interruptions and classify intervals on half-open day boundaries, including instantaneous clock events.
+
+### Dashboard accessibility and report performance
+
+- Expose chart mode selection and day summaries to assistive technology. Support arrow navigation, Home, End, and Escape, with readable chart labels and contained scrolling on narrow screens.
+- Aggregate raw and archived all-time totals per interface before joining adapter metadata. Reuse adapter metadata and classifications and parse stored timestamps using their round-trip format with a fallback for older formats.
 
 ### Automatic SQLite retention
 

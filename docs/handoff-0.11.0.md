@@ -1,5 +1,51 @@
 # Handoff — OctetLedger 0.11.0
 
+## Clôture locale de l’étape 5 — 2026-11-17
+
+Branche `audit/0.11.0`, binaire `0.10.1`, schéma SQLite 6. Les preuves locales sont dans `artifacts/stage5/`.
+
+- Le dashboard accepte la boucle locale à l’autorité exacte imprimée par la CLI et les méthodes GET et HEAD. Un hôte DNS, une cible HTTP absolue et les requêtes signalées comme interorigine sont refusés avant SQLite. La CSP limite les scripts, styles et connexions à la même origine. Les réponses désactivent la mise en cache, l’intégration en cadre et le reniflage MIME. [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#name-host-and-authority) · [Fetch Metadata](https://www.w3.org/TR/fetch-metadata/) · [CSP](https://www.w3.org/TR/CSP3/)
+- Le HTML, le CSS et le JavaScript résident dans `src/OctetLedger.Cli/Dashboard/`. L’assembly les embarque et sert trois routes explicites.
+- Les trois modes conservent leurs données, leurs couleurs et leurs marqueurs. Les boutons indiquent le mode actif. Le SVG expose un nom et un résumé par jour. Tab atteint le graphique, les flèches et Home/End déplacent le focus, et Échap ferme l’infobulle. Sur mobile, le graphique et les tableaux défilent dans leurs sections. [Navigation clavier WAI](https://www.w3.org/WAI/ARIA/apg/practices/keyboard-interface/) · [Contenu au survol ou au focus](https://www.w3.org/WAI/WCAG22/Understanding/content-on-hover-or-focus.html)
+- Les totaux bruts et archivés sont agrégés par interface avant la jointure. La lecture des relevés réutilise les métadonnées d’interface, le filtre réutilise la classification d’un même pilote et les dates du format SQLite courant empruntent le parseur ISO rapide. Les autres formats historiques restent lisibles.
+
+La suite Release x64 passe **241 tests sur 241**. `dotnet format --verify-no-changes --no-restore` passe également. Le rapport est `tests/release-win-x64.trx`. Les tests Chromium couvrent notamment les trois modes, le contenu hostile, la CSP, les états de mesure et la navigation clavier. Le dashboard réel a aussi été ouvert dans un navigateur avec une base synthétique. Les contrôles à 1120 px et 320 px ont vérifié le rendu, les touches réelles, le focus et le confinement du défilement et de l’infobulle.
+
+Les exécutables autonomes `win-x64` et `win-arm64` ont été construits et leur architecture PE vérifiée. Le x64 a servi le HTML, le CSS et le JavaScript avec des empreintes identiques aux sources et la CSP attendue. L’API a renvoyé les données de 30 jours. Le résultat est dans `single-file-check.txt`.
+
+### Mesures avant et après
+
+Le script `scripts/benchmark-dashboard.py` utilise la bibliothèque standard de Python. La comparaison utilise la même base synthétique de 388 800 relevés minute, 3 000 agrégats journaliers et 129 600 observations, répartis sur trois interfaces. Le tableau donne la médiane de cinq mesures après deux passages de chauffe. Les temps CLI comprennent le lancement du processus et la sérialisation JSON. Les temps du dashboard mesurent les réponses HTTP sur loopback. Le temps de rendu du navigateur n’a pas été mesuré.
+
+| Opération | Avant | Après |
+|---|---:|---:|
+| Rapport horaire, 24 h | 663 ms | 626 ms |
+| Rapport quotidien, 30 j | 2 522 ms | 1 895 ms |
+| Rapport hebdomadaire, 12 sem. | 4 877 ms | 3 676 ms |
+| Rapport mensuel, 12 mois | 5 376 ms | 4 023 ms |
+| Rapport total | 3 261 ms | 803 ms |
+| Dashboard, `GET /api/data` | 1 596 ms | 1 142 ms |
+| Dashboard, document HTML seul | 1,15 ms | 1,11 ms |
+
+La référence est le commit `3efa77a`. Les mesures brutes sont dans `before-comparison.json` et `after-comparison.json`, et le profil par opération est dans `profile-before.txt` et `profile-after.txt`. Dans ce profil, la requête SQL du total passe de 2 360 à 296 ms, et la lecture des relevés sur 90 jours de 4 022 à 2 585 ms.
+
+Les champs stables des cinq rapports JSON concordent ligne par ligne. Le débit moyen est vérifié par les tests à durée fixe, car il évolue avec le temps écoulé. Après la lecture des rapports, seuls deux compteurs d’en-tête SQLite ont avancé dans chaque copie. Les pages de données sont identiques à leur état initial et `PRAGMA quick_check` réussit dans les deux cas. La trace est dans `report-parity.txt`.
+
+Pour reproduire la comparaison, exécuter le script avec le binaire avant et un répertoire neuf en passant `--seed --samples 5`. Exécuter ensuite le script avec le binaire après et le même répertoire en passant `--samples 5`.
+
+### Commits de l’étape
+
+| Commit local | Objet |
+|---|---|
+| `0afcd82` | Ressources HTML, CSS et JavaScript embarquées. |
+| `e1b53ff` | Validation HTTP et en-têtes de sécurité. |
+| `253686a` | Navigation clavier, infobulles accessibles et affichage mobile. |
+| `5b2c843` | Optimisations des rapports SQLite et banc de mesure. |
+
+### Validations restantes
+
+La validation finale reste à effectuer sur ARM64 natif, ainsi que les transitions Windows et l’avertissement du premier lancement depuis un ZIP téléchargé. L’accessibilité a été vérifiée au clavier et dans l’arbre d’accessibilité Chromium. Le comportement avec un lecteur d’écran dédié reste à vérifier. La version, la publication et WinGet relèvent d’une étape ultérieure.
+
 ## Clôture locale de l’étape 4 — 2026-11-16
 
 Branche `audit/0.11.0`, version du binaire `0.10.1`. Les preuves de clôture sont conservées dans `artifacts/stage4-finalization/`.
