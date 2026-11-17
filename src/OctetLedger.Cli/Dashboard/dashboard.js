@@ -166,19 +166,19 @@ function renderSvgChart() {
       tipHtml += `</div>`;
 
       if (has && tot > 0) {
-        tipHtml += `<div class="tip-row"><span><i class="c-dot" style="background:var(--blue)"></i>Download</span><b>${F(rv)}</b><span class="tip-pct">${pctDl}%</span></div>`;
-        tipHtml += `<div class="tip-row"><span><i class="c-dot" style="background:var(--purple)"></i>Upload</span><b>${F(sv)}</b><span class="tip-pct">${pctUl}%</span></div>`;
+        tipHtml += `<div class="tip-row"><span><i class="c-dot download-marker"></i>Download</span><b>${F(rv)}</b><span class="tip-pct">${pctDl}%</span></div>`;
+        tipHtml += `<div class="tip-row"><span><i class="c-dot upload-marker"></i>Upload</span><b>${F(sv)}</b><span class="tip-pct">${pctUl}%</span></div>`;
         tipHtml += `<div class="tip-row total"><span>Total</span><b>${F(tot)}</b></div>`;
       } else if (!has) {
-        tipHtml += `<div class="tip-row" style="color:var(--mt)"><i>No measurement in selected scope</i></div>`;
+        tipHtml += `<div class="tip-row tip-muted"><i>No measurement in selected scope</i></div>`;
       } else {
-        tipHtml += `<div class="tip-row" style="color:var(--mt)"><i>Measured 0 bytes traffic</i></div>`;
+        tipHtml += `<div class="tip-row tip-muted"><i>Measured 0 bytes traffic</i></div>`;
       }
 
-      tipHtml += `<div class="tip-row" style="font-size:0.7rem;color:var(--mt);margin-top:4px">${d.observations} collector observation(s)</div>`;
+      tipHtml += `<div class="tip-row tip-muted tip-observations">${d.observations} collector observation(s)</div>`;
       if (d.hasCollectorGap) tipHtml += `<div class="tip-warn">⚠️ Collection interruption recorded</div>`;
       if (d.hasInterfaceGap) tipHtml += `<div class="tip-warn">⚠️ Interface interruption in selected scope</div>`;
-      if (d.hasUnknownCoverage) tipHtml += `<div class="tip-row" style="color:var(--mt)">Coverage unknown for part of this day</div>`;
+      if (d.hasUnknownCoverage) tipHtml += `<div class="tip-row tip-muted">Coverage unknown for part of this day</div>`;
 
       tip.innerHTML = tipHtml;
       tip.classList.add('visible');
@@ -189,7 +189,6 @@ function renderSvgChart() {
       const tipW = 200;
       const tipX = Math.max(10, Math.min(colCenterRel - tipW / 2, wrapRect.width - tipW - 10));
       tip.style.left = tipX + 'px';
-      tip.style.top = '10px';
     });
 
     hit.addEventListener('mouseleave', () => {
@@ -239,8 +238,8 @@ fetch('/api/data').then(async r=>{if(!r.ok)throw new Error(await r.text());retur
   const ulPct = sum > 0 ? (totUl / sum * 100).toFixed(1) : 0;
   const ratio = totUl > 0 ? (totDl / totUl).toFixed(1) + ':1' : '—';
   el('ch-pills').innerHTML = `
-    <div class="pill"><span class="pdot" style="background:var(--blue)"></span>Download: <b>${F(totDl)}</b> (${dlPct}%)</div>
-    <div class="pill"><span class="pdot" style="background:var(--purple)"></span>Upload: <b>${F(totUl)}</b> (${ulPct}%)</div>
+    <div class="pill"><span class="pdot download-marker"></span>Download: <b>${F(totDl)}</b> (${dlPct}%)</div>
+    <div class="pill"><span class="pdot upload-marker"></span>Upload: <b>${F(totUl)}</b> (${ulPct}%)</div>
     <div class="pill"><span>⚡</span>Ratio DL/UL: <b>${ratio}</b></div>
     <div class="pill"><span>🏆</span>Peak: <b>${F(peakVal)}</b> ${peakPeriod?'('+peakPeriod.slice(5)+')':''}</div>
   `;

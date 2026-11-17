@@ -57,7 +57,7 @@ h2{font-size:.95rem;font-weight:600;color:var(--fg2);margin:28px 0 12px;padding-
 .col-hit:hover,.col-hit.active{fill:rgba(56,189,248,.07)}
 
 /* Tooltip */
-.c-tip{position:absolute;background:rgba(22,27,34,.95);backdrop-filter:blur(10px);
+.c-tip{position:absolute;top:10px;background:rgba(22,27,34,.95);backdrop-filter:blur(10px);
   border:1px solid #444c56;border-radius:10px;padding:10px 14px;font-size:.78rem;
   pointer-events:none;opacity:0;transition:opacity .15s,transform .1s;z-index:20;
   box-shadow:0 8px 24px rgba(0,0,0,.6);min-width:185px;line-height:1.5}
@@ -70,12 +70,20 @@ h2{font-size:.95rem;font-weight:600;color:var(--fg2);margin:28px 0 12px;padding-
 .tip-row .c-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:4px}
 .tip-row.total{margin-top:6px;padding-top:5px;border-top:1px solid var(--bd2);font-weight:600;color:var(--fg)}
 .tip-pct{color:var(--mt);font-size:.72rem}
+.tip-muted{color:var(--mt)}
+.tip-observations{font-size:.7rem;margin-top:4px}
 .tip-warn{margin-top:6px;color:var(--yellow);font-size:.72rem;display:flex;align-items:center;gap:4px}
 
 /* Chart legend */
 .lgd{display:flex;gap:16px;font-size:.76rem;color:var(--mt);margin:14px 4px 0;flex-wrap:wrap}
 .lgd span{display:flex;align-items:center;gap:6px}
 .lgd i{display:inline-block;width:10px;height:10px;border-radius:2px;flex-shrink:0}
+.download-marker{background:var(--blue)}
+.upload-marker{background:var(--purple)}
+.lgd .missing-marker{background:repeating-linear-gradient(135deg,transparent,transparent 3px,var(--mt) 3px,var(--mt) 4px)}
+.lgd .gap-marker{width:7px;height:7px;border-radius:50%}
+.lgd .collector{background:var(--yellow)}
+.lgd .interface{border:1px solid var(--yellow)}
 
 /* Tables */
 .scr{overflow-x:auto;-webkit-overflow-scrolling:touch}

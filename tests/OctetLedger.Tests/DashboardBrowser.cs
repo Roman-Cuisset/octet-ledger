@@ -101,6 +101,7 @@ internal static class DashboardBrowser
             {
                 var context = await listener.GetContextAsync().WaitAsync(cancellationToken);
                 using var response = context.Response;
+                DashboardHttp.SetHeaders(response);
                 if (!files.TryGetValue(context.Request.Url?.AbsolutePath ?? "", out var asset))
                 {
                     response.StatusCode = 404;
