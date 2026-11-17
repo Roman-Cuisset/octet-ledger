@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OctetLedger Dashboard</title>
+<link rel="stylesheet" href="/dashboard.css">
+<script src="/dashboard.js" defer></script>
+</head>
+<body>
+
+<div class="hdr">
+  <h1>OctetLedger</h1>
+  <span class="sub">Local network usage · last 30 days</span>
+</div>
+<div class="sbar">
+  <span class="dot" id="dot"></span>
+  <span id="state">Loading…</span>
+  <span class="sep">·</span>
+  <span id="lastin">—</span>
+</div>
+<div id="meta" role="status"></div>
+
+<div class="cards">
+  <div class="card"><div class="lbl">Total (30 days)</div><div class="val" id="total">—</div></div>
+  <div class="card"><div class="lbl">Daily average</div><div class="val" id="average">—</div></div>
+  <div class="card"><div class="lbl">Peak day</div><div class="val" id="peak">—</div></div>
+</div>
+
+<h2>Traffic</h2>
+<div class="chcard">
+  <div class="ch-head">
+    <div>
+      <div class="ch-title">Network Traffic</div>
+      <div class="ch-sub" id="ch-sub">Last 30 calendar days</div>
+    </div>
+    <div class="ch-toggles">
+      <button class="tbtn active" data-mode="stacked" id="btn-stacked">Stacked</button>
+      <button class="tbtn" data-mode="grouped" id="btn-grouped">Side-by-side</button>
+      <button class="tbtn" data-mode="area" id="btn-area">Trend</button>
+    </div>
+  </div>
+  <div class="ch-pills" id="ch-pills"></div>
+  <div class="ch-svg-wrap" id="ch-wrap">
+    <svg id="chart-svg" viewBox="0 0 960 270" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="g-dl" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#38bdf8"/>
+          <stop offset="100%" stop-color="#0284c7"/>
+        </linearGradient>
+        <linearGradient id="g-ul" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#c084fc"/>
+          <stop offset="100%" stop-color="#7c3aed"/>
+        </linearGradient>
+        <linearGradient id="g-dl-area" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.4"/>
+          <stop offset="100%" stop-color="#0284c7" stop-opacity="0.0"/>
+        </linearGradient>
+        <linearGradient id="g-ul-area" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#c084fc" stop-opacity="0.35"/>
+          <stop offset="100%" stop-color="#7c3aed" stop-opacity="0.0"/>
+        </linearGradient>
+        <pattern id="g-hatch" width="6" height="6" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+          <line x1="0" y1="0" x2="0" y2="6" stroke="#484f58" stroke-width="1.5"/>
+        </pattern>
+      </defs>
+      <g id="svg-grid"></g>
+      <g id="svg-bars"></g>
+      <g id="svg-hits"></g>
+    </svg>
+    <div id="chart-tip" class="c-tip"></div>
+  </div>
+  <div class="lgd">
+    <span><i style="background:var(--blue)"></i> Download</span>
+    <span><i style="background:var(--purple)"></i> Upload</span>
+    <span><i style="background:repeating-linear-gradient(135deg,transparent,transparent 3px,var(--mt) 3px,var(--mt) 4px)"></i> No measurement</span>
+    <span><i style="width:7px;height:7px;border-radius:50%;background:var(--yellow)"></i> Collection interruption</span>
+    <span><i style="width:7px;height:7px;border-radius:50%;border:1px solid var(--yellow)"></i> Interface interruption</span>
+  </div>
+</div>
+
+<h2>Daily breakdown</h2>
+<div class="scr"><table><thead><tr>
+  <th>Day</th><th>Interface</th><th class="n">Download</th><th class="n">Upload</th><th class="n">Total</th><th>Precision</th>
+</tr></thead><tbody id="rows"></tbody></table></div>
+
+<details>
+  <summary>Collection health<span class="cnt" id="hcnt"></span></summary>
+  <div class="inn"><div class="hg" id="health"></div></div>
+</details>
+
+<details>
+  <summary>Collection observations<span class="cnt" id="ocnt"></span></summary>
+  <div class="inn">
+    <div class="scr"><table><thead><tr>
+      <th>Day</th><th class="n">Observations</th><th class="n">Measured</th><th class="n">Zero-byte</th><th class="n">No active iface</th>
+    </tr></thead><tbody id="coverage"></tbody></table></div>
+  </div>
+</details>
+
+<details>
+  <summary>Interruptions & unknown coverage<span class="cnt" id="gcnt"></span></summary>
+  <div class="inn">
+    <ul class="tl" id="gaps"></ul>
+  </div>
+</details>
+
+<details>
+  <summary>Recent collector events<span class="cnt" id="ecnt"></span></summary>
+  <div class="inn">
+    <ul class="tl" id="events"></ul>
+  </div>
+</details>
+
+<div class="ft" id="ft">OctetLedger · 127.0.0.1</div>
+</body></html>

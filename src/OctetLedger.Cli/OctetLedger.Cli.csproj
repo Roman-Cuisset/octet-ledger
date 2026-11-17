@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="OctetLedger.Tests" />
+    <EmbeddedResource Include="Dashboard\*.*" LogicalName="OctetLedger.Dashboard.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

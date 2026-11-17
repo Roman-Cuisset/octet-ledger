@@ -13,7 +13,6 @@ internal static class DashboardBrowser
     {
         var browserPath = FindBrowser();
         var verification = $$"""
-            <script>
             function verifyDashboard(){
               if(!chartState.data){setTimeout(verifyDashboard,20);return;}
               // Let resource/error handlers run before checking hostile data.
@@ -26,7 +25,6 @@ internal static class DashboardBrowser
               },100);
             }
             verifyDashboard();
-            </script>
             """;
         var directory = Path.Combine(Path.GetTempPath(), $"octetledger-dashboard-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
@@ -39,7 +37,7 @@ internal static class DashboardBrowser
         listener.Prefixes.Add(url);
         listener.Start();
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        var server = ServeAsync(listener, DashboardCommand.Html + verification, JsonSerializer.Serialize(payload), cancellation.Token);
+        var server = ServeAsync(listener, verification, JsonSerializer.SerializeToUtf8Bytes(payload), cancellation.Token);
         using var browser = new Process
         {
             StartInfo = new ProcessStartInfo(browserPath)
@@ -87,19 +85,30 @@ internal static class DashboardBrowser
         }
     }
 
-    private static async Task ServeAsync(HttpListener listener, string html, string payload, CancellationToken cancellationToken)
+    private static async Task ServeAsync(HttpListener listener, string verification, byte[] payload, CancellationToken cancellationToken)
     {
+        var html = Encoding.UTF8.GetString(DashboardAssets.Files["/"].Bytes)
+            .Replace("</body>", "<script src=\"/verify.js\" defer></script></body>", StringComparison.Ordinal);
+        var files = new Dictionary<string, (byte[] Bytes, string ContentType)>(DashboardAssets.Files)
+        {
+            ["/"] = (Encoding.UTF8.GetBytes(html), "text/html; charset=utf-8"),
+            ["/api/data"] = (payload, "application/json; charset=utf-8"),
+            ["/verify.js"] = (Encoding.UTF8.GetBytes(verification), "text/javascript; charset=utf-8")
+        };
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
                 var context = await listener.GetContextAsync().WaitAsync(cancellationToken);
                 using var response = context.Response;
-                var api = context.Request.Url?.AbsolutePath == "/api/data";
-                response.ContentType = api ? "application/json; charset=utf-8" : "text/html; charset=utf-8";
-                var bytes = Encoding.UTF8.GetBytes(api ? payload : html);
-                response.ContentLength64 = bytes.Length;
-                await response.OutputStream.WriteAsync(bytes, cancellationToken);
+                if (!files.TryGetValue(context.Request.Url?.AbsolutePath ?? "", out var asset))
+                {
+                    response.StatusCode = 404;
+                    continue;
+                }
+                response.ContentType = asset.ContentType;
+                response.ContentLength64 = asset.Bytes.Length;
+                await response.OutputStream.WriteAsync(asset.Bytes, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
