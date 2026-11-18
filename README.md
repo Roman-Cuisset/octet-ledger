@@ -69,9 +69,9 @@ For a WinGet portable installation, start background collection once with:
 octetledger collector install
 ```
 
-The WinGet payload can carry a Windows Internet zone mark. `collector install` removes that mark
-from the installed executable because the hidden VBScript launcher starts it through ShellExecute;
-Windows SmartScreen and other security policies are unchanged.
+Collector registration preserves the Windows download zone mark. If Windows blocks the background
+launch, compare the reported executable with the one in the official ZIP after checking the ZIP’s
+published SHA-256. Use Windows’ approval for that file if offered, or contact your administrator.
 
 ## How to read the numbers
 

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Globalization;
 using OctetLedger.Core;
 
 namespace OctetLedger.Tests;
@@ -5,131 +7,95 @@ namespace OctetLedger.Tests;
 public class CollectorTaskManagerTests
 {
 
-    [Fact]
-    public void InternetMarkIsClearedOnlyForTheRunningOctetLedgerImage()
+    [WindowsFact]
+    public void StartupDiagnosticPreservesTheDownloadMarkOnTheAliasTarget()
     {
-        if (!OperatingSystem.IsWindows()) return;
-        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-mark-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, "octetledger.exe");
+        var directory = Directory.CreateTempSubdirectory("octetledger-mark-");
         try
         {
-            File.WriteAllText(path, "binary");
-            File.WriteAllText($"{path}:Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3");
-            File.WriteAllText($"{path}:unrelated", "keep");
-            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(-5));
-
-            Assert.True(CollectorTaskManager.TryClearInternetMark(path, path, "OctetLedger"));
-
-            Assert.ThrowsAny<IOException>(() => File.ReadAllText($"{path}:Zone.Identifier"));
-            Assert.Equal("keep", File.ReadAllText($"{path}:unrelated"));
-            Assert.Equal("binary", File.ReadAllText(path));
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
-    public void InternetMarkOfAnotherFileOrProductIsNeverCleared()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-mark-guard-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, "octetledger.exe");
-        var other = Path.Combine(directory, "other.exe");
-        try
-        {
-            File.WriteAllText(path, "binary");
-            File.WriteAllText(other, "other");
-            File.WriteAllText($"{path}:Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3");
-
-            Assert.False(CollectorTaskManager.TryClearInternetMark(path, other, "OctetLedger"));
-            Assert.False(CollectorTaskManager.TryClearInternetMark(path, path, "OtherProduct"));
-            Assert.Contains("ZoneId=3", File.ReadAllText($"{path}:Zone.Identifier"));
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
-    public void InternetMarkOfAPortableAliasClearsItsTarget()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-mark-link-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
-        var packageDirectory = Directory.CreateDirectory(Path.Combine(directory, "package"));
-        var target = Path.Combine(packageDirectory.FullName, "octetledger.exe");
-        var alias = Path.Combine(directory, "octetledger.exe");
-        try
-        {
+            var target = Path.Combine(directory.FullName, "octetledger.exe");
+            var alias = Path.Combine(directory.FullName, "alias.exe");
+            var logPath = Path.Combine(directory.FullName, "collector.log");
+            var zonePath = $"{target}:Zone.Identifier";
+            const string zoneMark = "[ZoneTransfer]\r\nZoneId=3";
             File.WriteAllText(target, "binary");
-            File.WriteAllText($"{target}:Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3");
-            File.SetLastWriteTimeUtc(target, DateTime.UtcNow.AddMinutes(-5));
-            try { File.CreateSymbolicLink(alias, target); }
-            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException) { return; }
+            File.CreateSymbolicLink(alias, target);
 
-            Assert.True(CollectorTaskManager.TryClearInternetMark(alias, alias, "OctetLedger"));
+            var unmarked = CollectorTaskManager.DescribeStartupFailure(logPath, alias);
+            Assert.Contains(logPath, unmarked);
+            Assert.DoesNotContain("SHA-256", unmarked);
 
-            Assert.ThrowsAny<IOException>(() => File.ReadAllText($"{target}:Zone.Identifier"));
+            File.WriteAllText(zonePath, zoneMark);
+            File.WriteAllText($"{target}:unrelated", "keep");
+
+            var marked = CollectorTaskManager.DescribeStartupFailure(logPath, alias);
+            Assert.Contains(target, marked);
+            Assert.Contains("SHA-256", marked);
+            Assert.Equal(zoneMark, File.ReadAllText(zonePath));
+            Assert.Equal("keep", File.ReadAllText($"{target}:unrelated"));
             Assert.Equal("binary", File.ReadAllText(alias));
         }
         finally
         {
-            Directory.Delete(directory, recursive: true);
+            directory.Delete(recursive: true);
         }
     }
 
-    [Fact]
-    public void InternetMarkOfAFileTouchedAfterProcessStartIsNotCleared()
+    [WindowsFact]
+    public void CollectorIdentityMatchesALiveProcessThroughAPortableAlias()
     {
-        if (!OperatingSystem.IsWindows()) return;
-        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-mark-race-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, "octetledger.exe");
+        var directory = Directory.CreateTempSubdirectory("octetledger-identity-");
         try
         {
-            File.WriteAllText(path, "binary");
-            File.WriteAllText($"{path}:Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3");
-            // Simulates a file replaced after this process started.
-            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(5));
+            var package = directory.CreateSubdirectory("package");
+            var target = Path.Combine(package.FullName, "octetledger.exe");
+            var alias = Path.Combine(directory.FullName, "octetledger.exe");
+            var other = Path.Combine(directory.CreateSubdirectory("other").FullName, "octetledger.exe");
+            // A copy of cmd.exe stays alive on redirected input without running collector or user startup code.
+            File.Copy(Path.Combine(Environment.SystemDirectory, "cmd.exe"), target);
+            File.Copy(target, other);
+            File.CreateSymbolicLink(alias, target);
+            using var process = Process.Start(new ProcessStartInfo(target, "/d /q")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            });
+            Assert.NotNull(process);
 
-            Assert.False(CollectorTaskManager.TryClearInternetMark(path, path, "OctetLedger"));
-            Assert.Contains("ZoneId=3", File.ReadAllText($"{path}:Zone.Identifier"));
+            try
+            {
+                var pid = process.Id.ToString(CultureInfo.InvariantCulture);
+                var start = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
+                Assert.True(CollectorTaskManager.IsExpectedCollectorProcess(process, [pid, start, target], alias));
+                Assert.True(CollectorTaskManager.IsExpectedCollectorProcess(process, [pid, start, alias], target));
+                Assert.False(CollectorTaskManager.IsExpectedCollectorProcess(process, [pid, "0", target], alias));
+                Assert.False(CollectorTaskManager.IsExpectedCollectorProcess(process, [pid, start, other], alias));
+                Assert.False(CollectorTaskManager.IsExpectedCollectorProcess(process, [pid, start, target], other));
+            }
+            finally
+            {
+                process.StandardInput.Close();
+                if (!process.WaitForExit(5000))
+                {
+                    process.Kill();
+                    process.WaitForExit(5000);
+                }
+            }
         }
         finally
         {
-            Directory.Delete(directory, recursive: true);
+            directory.Delete(recursive: true);
         }
     }
 
-    [Fact]
-    public void PortableAliasAndItsTargetAreTheSameExecutable()
+    private sealed class WindowsFactAttribute : FactAttribute
     {
-        if (!OperatingSystem.IsWindows()) return;
-        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-identity-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
-        var target = Path.Combine(directory, "package.exe");
-        var alias = Path.Combine(directory, "octetledger.exe");
-        var other = Path.Combine(directory, "other.exe");
-        try
+        public WindowsFactAttribute()
         {
-            File.WriteAllText(target, "binary");
-            File.WriteAllText(other, "binary");
-            try { File.CreateSymbolicLink(alias, target); }
-            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException) { return; }
-
-            Assert.True(CollectorTaskManager.AreSameExecutablePath(alias, target));
-            Assert.True(CollectorTaskManager.AreSameExecutablePath(alias, alias));
-            Assert.False(CollectorTaskManager.AreSameExecutablePath(alias, other));
-            Assert.False(CollectorTaskManager.AreSameExecutablePath(alias, ""));
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
+            if (!OperatingSystem.IsWindows()) Skip = "Requires Windows process or file stream semantics.";
         }
     }
 

@@ -4,10 +4,9 @@
 
 ### Collector registration for portable package managers
 
-- Clear the Windows Internet zone mark from the executable when `collector install` or `collector start` registers the collector. The hidden VBScript launcher starts it through ShellExecute, which honored the mark and blocked the worker without a log or PID; WinGet and browser downloads previously failed with `Collector could not be launched`.
-- Restrict that removal to the currently running `octetledger.exe` with the official product name and an unchanged on-disk image; arbitrary paths, other products, and files replaced after process start are rejected. Windows security policies remain untouched.
-- Resolve portable package alias symlinks when comparing executable paths, so the background worker is recognized, reported ready, and waited for during stop and uninstall instead of discarding its PID file.
-- Add regressions for the unblock guard, alternate streams, and portable alias identity.
+- Preserve the Windows download zone mark during collector registration and startup. When a marked executable fails to launch, report its path and point the user to package verification and Windows approval.
+- Resolve portable package alias symlinks when comparing the running worker and its saved identity, so startup, stop, and uninstall can identify the collector through the WinGet alias.
+- Test alias resolution against a live Windows process and verify that the startup diagnostic preserves the executable and its alternate streams.
 
 ## 0.11.0
 

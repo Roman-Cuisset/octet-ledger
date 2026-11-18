@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
-
 using System.Text;
 
 namespace OctetLedger.Core;
@@ -106,10 +105,6 @@ public static class CollectorTaskManager
     {
         var fullPath = Path.GetFullPath(executablePath);
         if (!File.Exists(fullPath)) throw new FileNotFoundException("OctetLedger executable was not found.", fullPath);
-        // The launcher and watchdog start this file through ShellExecute (VBScript Run), which honors
-        // the Windows Internet zone mark and can block invisibly. The user explicitly installs/starts
-        // the collector here, so clear only that mark from the installed file.
-        TryClearInternetMark(fullPath);
         Directory.CreateDirectory(AppDataPaths.DataDirectory);
         var temporaryLauncher = $"{LauncherPath}.tmp";
         try
@@ -173,8 +168,6 @@ public static class CollectorTaskManager
         if (existingProcess is null || existingProcess.HasExited)
         {
             TryDeleteStopFile();
-            var currentExecutable = Environment.ProcessPath;
-            if (!string.IsNullOrWhiteSpace(currentExecutable)) TryClearInternetMark(currentExecutable);
             Process.Start(new ProcessStartInfo("wscript.exe", $"//B //Nologo \"{LauncherPath}\"") { UseShellExecute = true })?.Dispose();
         }
         var startup = WaitForStartup(() =>
@@ -186,9 +179,7 @@ public static class CollectorTaskManager
                 success >= process.StartTime.ToUniversalTime() && DateTimeOffset.UtcNow - success <= CollectionDelayThreshold);
         });
         if (startup is CollectorStartupState.Ready or CollectorStartupState.Pending) return startup;
-        throw new InvalidOperationException(
-            $"Collector could not be launched. See '{LogPath}' if it was created. " +
-            "If this executable was downloaded, remove its Internet zone mark with 'Unblock-File' and retry.");
+        throw new InvalidOperationException(DescribeStartupFailure(LogPath, Environment.ProcessPath));
     }
 
     internal static bool ShouldRestartCollector(DateTimeOffset? lastSuccess, DateTimeOffset startedUtc, DateTimeOffset nowUtc)
@@ -317,7 +308,7 @@ public static class CollectorTaskManager
                 if (int.TryParse(identity[0], out var pid))
                 {
                     var process = Process.GetProcessById(pid);
-                    if (IsExpectedCollectorProcess(process, identity)) return process;
+                    if (IsExpectedCollectorProcess(process, identity, Environment.ProcessPath)) return process;
                     process.Dispose();
                 }
             }
@@ -331,22 +322,21 @@ public static class CollectorTaskManager
         return null;
     }
 
-    private static bool IsExpectedCollectorProcess(Process process, string[] identity)
+    internal static bool IsExpectedCollectorProcess(Process process, string[] identity, string? expectedExecutable)
     {
         try
         {
             if (process.HasExited || !string.Equals(process.ProcessName, "octetledger", StringComparison.OrdinalIgnoreCase))
                 return false;
-            var currentExecutable = Environment.ProcessPath;
-            if (string.IsNullOrWhiteSpace(currentExecutable) ||
-                !AreSameExecutablePath(process.MainModule?.FileName ?? "", currentExecutable))
+            if (string.IsNullOrWhiteSpace(expectedExecutable) ||
+                !AreSameExecutablePath(process.MainModule?.FileName ?? "", expectedExecutable))
                 return false;
 
             if (identity.Length == 3)
             {
                 return long.TryParse(identity[1], out var startTicks) &&
                        process.StartTime.ToUniversalTime().Ticks == startTicks &&
-                       AreSameExecutablePath(identity[2], currentExecutable);
+                       AreSameExecutablePath(identity[2], expectedExecutable);
             }
 
             var pidWritten = File.GetLastWriteTimeUtc(PidPath);
@@ -447,8 +437,8 @@ public static class CollectorTaskManager
         return observedRunning ? CollectorStartupState.Pending : CollectorStartupState.Failed;
     }
 
-    /// <summary>Compares two executable paths, resolving portable-package symlinks and hard links.</summary>
-    internal static bool AreSameExecutablePath(string first, string second)
+    /// <summary>Compares executable paths after resolving file symlinks such as WinGet command aliases.</summary>
+    private static bool AreSameExecutablePath(string first, string second)
     {
         if (string.IsNullOrWhiteSpace(first) || string.IsNullOrWhiteSpace(second)) return false;
         return string.Equals(ResolveFinalPath(first), ResolveFinalPath(second), StringComparison.OrdinalIgnoreCase);
@@ -469,48 +459,24 @@ public static class CollectorTaskManager
         }
     }
 
-    /// <summary>
-    /// Removes the Internet zone mark only from the currently executing OctetLedger image.
-    /// Windows policies are untouched; arbitrary paths, other products, and files replaced after
-    /// this process started are rejected. Unsigned official builds rely on the running image
-    /// identity; publisher authenticity still requires code signing.
-    /// </summary>
-    internal static bool TryClearInternetMark(string executablePath, string? currentExecutable = null, string? productName = null)
+    internal static string DescribeStartupFailure(string logPath, string? executablePath)
     {
-        if (!OperatingSystem.IsWindows()) return false;
-        var current = currentExecutable ?? Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(current) || !AreSameExecutablePath(executablePath, current)) return false;
+        var message = $"Collector could not be launched. See '{logPath}' if it was created.";
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(executablePath)) return message;
 
         var target = ResolveFinalPath(executablePath);
-        if (!File.Exists(target)) return false;
-        if (!string.Equals(Path.GetFileName(target), "octetledger.exe", StringComparison.OrdinalIgnoreCase)) return false;
-        if (!string.Equals(productName ?? FileVersionInfo.GetVersionInfo(target).ProductName ?? "",
-                "OctetLedger", StringComparison.Ordinal)) return false;
-        if (WasReplacedAfterProcessStart(target)) return false;
-
         try
         {
-            File.Delete($"{target}:Zone.Identifier");
-            return true;
+            using var zoneMark = File.OpenRead($"{target}:Zone.Identifier");
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return false;
+            return message;
         }
-    }
 
-    private static bool WasReplacedAfterProcessStart(string path)
-    {
-        try
-        {
-            var startUtc = Process.GetCurrentProcess().StartTime.ToUniversalTime();
-            // Allow for file-system timestamp granularity and a slow image start.
-            return File.GetLastWriteTimeUtc(path) > startUtc.AddSeconds(2);
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
-        {
-            return true;
-        }
+        return $"{message} '{target}' has a Windows download zone mark. " +
+               "If Windows blocked the launch, verify the package source and SHA-256 before reviewing the file in Windows. " +
+               "If your organization blocks the executable, contact your administrator.";
     }
 
     internal static string BuildLauncherScript(string executablePath)
