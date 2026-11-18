@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main, audit/0.11.0]
+    branches: [main, audit/0.11.0, validation/0.11.1-collector]
   pull_request:
     branches: [main]
 
