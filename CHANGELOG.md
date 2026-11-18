@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0
 
 ### Security
 
@@ -53,6 +53,7 @@
 - Exercise timeouts, rejected updates and rollbacks, and preservation of installed files, settings, and statistics in the Windows lifecycle test.
 - Bound the update version check even if a child process keeps an output pipe open after the version process exits.
 - Restore the retained version’s collector registration after a failed update and remove newer startup entries when rolling back to a legacy collector.
+- Retry the atomic restoration of the working executable when a brief Windows file lock interrupts recovery from a failed rollback.
 - Run the .NET test suite on native Windows x64 and ARM64 in the release workflow. Use the supported `apps top --count 100` in live IPv6 validation.
 - Start the kernel ETW provider before opening the application traffic event source so `apps monitor` can capture TCP and UDP traffic.
 - Prefer installed Chrome for dashboard browser tests and use Edge when Chrome is unavailable.

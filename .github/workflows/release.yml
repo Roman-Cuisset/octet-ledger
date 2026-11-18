@@ -164,10 +164,12 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          artifacts/packages/*.zip
-          artifacts/packages/*.sha256
-          --notes "Detailed release notes: https://github.com/${{ github.repository }}/blob/$GITHUB_REF_NAME/CHANGELOG.md"
-          --generate-notes
-          --verify-tag
+        shell: bash
+        run: |
+          notes_file="docs/release-notes/$GITHUB_REF_NAME.md"
+          if [[ -f "$notes_file" ]]; then
+            notes=(--title "OctetLedger $GITHUB_REF_NAME" --notes-file "$notes_file")
+          else
+            notes=(--notes "Detailed release notes: https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md" --generate-notes)
+          fi
+          gh release create "$GITHUB_REF_NAME" artifacts/packages/*.zip artifacts/packages/*.sha256 "${notes[@]}" --verify-tag

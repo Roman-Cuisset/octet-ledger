@@ -46,14 +46,17 @@ The first sample establishes a baseline; recorded traffic appears after the next
 Download the x64 or ARM64 ZIP from GitHub Releases, extract it, and run `install.cmd`. The installer
 needs no administrator privileges, adds `octetledger` to the user PATH, and starts an invisible
 collector every 60 seconds. A hidden per-user Windows scheduled task checks the collector every minute
-and at logon, independently of its startup launcher.
+and at logon. Automatic background collection requires Windows Script Host with VBScript enabled.
+Each ZIP has a matching `.sha256` file. Compare its first field with the output of
+`Get-FileHash -Algorithm SHA256 <zip-path>` before extracting.
 
 Windows may show a security warning when you first run `install.cmd` from a downloaded ZIP.
 After validating the executable, installation and rollback remove the Internet-origin mark from
 the installed `octetledger.exe`. The downloaded files keep their marks, and Windows security
 policies still apply.
 
-Once the WinGet package is accepted, these commands will also work:
+WinGet is updated separately from GitHub Releases. Use the GitHub ZIP for 0.11.0 until WinGet lists
+that version. The existing WinGet package is available with:
 
 ```powershell
 winget install --id RomanCuisset.OctetLedger --exact
@@ -161,8 +164,8 @@ of silently exiting.
 
 Concurrent `collect`/`monitor` commands serialize counter acquisition and storage with SQLite's writer
 lock. Late or repeated pre-captured frames cannot replace newer baselines or alter collection history.
-Current acquisitions still rebaseline after a clock rollback or counter reset. No database migration
-or historical data rewrite is required; previously inflated totals are not retroactively repaired.
+Current acquisitions still rebaseline after a clock rollback or counter reset. These corrections
+apply to future collections. Previously recorded totals retain their original values.
 
 Collector health is based on the latest successful collection, not only on the presence of a
 process. `Running, collection delayed` means that the process exists but no collection has
@@ -242,8 +245,9 @@ default preferences by a settings mutation.
 
 Per-application tracking is opt-in. `apps monitor` uses Windows kernel ETW process, TCP/IP, and
 UDP/IP events and therefore requires an Administrator terminal. It stores hourly estimated payload
-bytes by process name only for the explicit monitoring window; `apps top` reads those totals. The
-estimates can differ from interface counters and are not billing-grade measurements. Normal
+bytes by process name only for the explicit monitoring window. Each event is counted in its own
+UTC hour, and `apps top` reads those totals. The estimates can differ from interface counters
+and are not billing-grade measurements. Normal
 interface collection does not require elevation and does not capture process activity.
 
 ## Machine-readable output
@@ -259,11 +263,19 @@ that could be interpreted as spreadsheet formulas are prefixed with an apostroph
 
 ## Updates
 
+To upgrade an existing ZIP installation manually, extract the new ZIP and run `install.cmd` in
+the same Windows user profile. The installer keeps the database and settings in
+`%LOCALAPPDATA%\OctetLedger`. OctetLedger 0.11.0 uses the same SQLite schema as 0.10.1 and
+migrates older supported databases, including those created by 0.3.0. Keep a backup before
+upgrading. Both 0.3.0 and 0.10.1 support `octetledger database backup <backup-path>`.
+
 Run `octetledger update check` to query the latest stable GitHub release. `octetledger update
 install` downloads the package for the current x64 or ARM64 architecture, applies a body timeout
 and size limit, verifies its published SHA-256 checksum, rejects unsafe archive paths, validates
 the downloaded executable version, and then delegates replacement to the rollback-capable
 installer. The previous executable is retained for `octetledger update rollback`.
+Rollback checks that the retained executable can read the current database. If it reports an
+incompatible database, restore a backup that the retained version can read before downgrading.
 
 The PowerShell installation and rollback scripts allow 60 seconds for each executable call.
 When running `install.ps1` or the installed `rollback.ps1` directly, use
