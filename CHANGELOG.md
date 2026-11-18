@@ -13,6 +13,7 @@
 - Ignore late or repeated pre-captured collection frames without replacing newer counter baselines, changing interface availability, or regressing collection history.
 - Acquire SQLite's write lock before reading current Windows counters in both `collect` and `monitor`, serializing competing collectors while preserving clock rollback and counter-reset handling.
 - Add regressions for out-of-order and repeated frames, disconnection history, reset baselines, migrated databases, concurrent writers, and failed acquisition. Preserve the existing database schema and stored history; no retroactive correction of previously inflated totals is attempted.
+- Attribute application payload bytes to the UTC hour of each ETW event when a capture spans multiple hours.
 
 ### Dashboard measurement fidelity
 
@@ -50,6 +51,8 @@
 - Remove the Internet-origin mark from the installed executable after validation while preserving the mark on downloaded files and other named streams.
 - Refuse SQLite restores while a client holds the destination open or when journal files remain without the original database. Recover journals left by an interrupted process before preserving the previous database and replacing it.
 - Exercise timeouts, rejected updates and rollbacks, and preservation of installed files, settings, and statistics in the Windows lifecycle test.
+- Bound the update version check even if a child process keeps an output pipe open after the version process exits.
+- Restore the retained version’s collector registration after a failed update and remove newer startup entries when rolling back to a legacy collector.
 - Run the .NET test suite on native Windows x64 and ARM64 in the release workflow. Use the supported `apps top --count 100` in live IPv6 validation.
 - Start the kernel ETW provider before opening the application traffic event source so `apps monitor` can capture TCP and UDP traffic.
 - Prefer installed Chrome for dashboard browser tests and use Edge when Chrome is unavailable.

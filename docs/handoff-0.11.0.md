@@ -1,5 +1,73 @@
 # Handoff — OctetLedger 0.11.0
 
+## Audit final de l’étape 6 — 2026-11-18
+
+Branche `audit/0.11.0`. Les ZIP de validation contiennent des binaires qui affichent encore `0.10.1` et utilisent le schéma SQLite 6. Les preuves reproductibles de cette étape sont dans `artifacts/stage6/`.
+
+L’audit a relu les changements du commit `b1cbe5c` à `f4b17af`, avec le README et le changelog. Les contrôles ont porté sur les captures réseau et la classification des interfaces, la couverture des rapports, la rétention et les écritures concurrentes dans SQLite, les sauvegardes et restaurations, le cycle de vie du collecteur et le dashboard.
+
+### Défauts reproduits et corrections
+
+| Défaut | Correction et preuve |
+|---|---|
+| La vérification de version attendait indéfiniment un flux de sortie hérité si le processus principal avait déjà quitté. | Le même délai borne la fin du processus et la lecture des deux flux. Un test reproduit le blocage avec un processus enfant réel et passe après correction. Voir `tests-regression-before/updater.trx` et la suite finale. |
+| Une capture ETW à cheval sur deux heures imputait tous les octets à l’heure de fin. | L’horodatage de chaque événement détermine l’heure UTC. Écriture de la fenêtre en une transaction. Le test à minuit vérifie les volumes, les offsets différents et le regroupement par application quelle que soit la casse. Les volumes historiques conservent leur attribution d’origine. |
+| Le contrôle de redémarrage échouait sur un horodatage JSON sous PowerShell en français. | Les dates relues sont converties et comparées comme des instants UTC. Le même démarrage donne `pending`. Un redémarrage réel du bac à sable donne `pass`, puis deux collectes réussies et les totaux préservés. Échec initial dans `sandbox-evidence/reboot-before-fix.json`. |
+| Une mise à jour 0.3.0 échouée pouvait restaurer le binaire seul et un rollback explicite pouvait laisser la tâche et la clé de démarrage de la version récente. | Le script désenregistre le collecteur rejeté et réinstalle celui du binaire restauré après remplacement. Le rollback retire les inscriptions du collecteur sortant après le contrôle de compatibilité. Le ZIP publié de la 0.3.0 reproduit les deux anomalies avant correction, puis confirme leur disparition et des empreintes de base et de réglages identiques. Voir `sandbox-resumed/legacy-recovery-baseline.json` et `sandbox-resumed/legacy-recovery-final.json`. |
+| Quatre vérifications Chromium ont échoué sous charge, entre délais dépassés et fichiers de profil temporaire encore ouverts. | Les essais Chromium s’exécutent les uns après les autres. Un délai explicite couvre le processus et ses flux. Le nettoyage réessaie après libération des fichiers. Le journal du passage ayant échoué est `tests-release/release-win-x64.trx`. |
+
+### Validations et preuves
+
+| Vérification | Résultat |
+|---|---|
+| Suite Release et format | **243/243** sous Windows x64, sans test ignoré. Rapport final `tests-audit/release-win-x64.trx`. Des passages antérieurs ont reproduit un dépassement du délai de préparation du test de mise à jour (`tests-final/release-win-x64.trx`) puis quatre échecs Chromium liés au banc de test (`tests-release/release-win-x64.trx`). Format .NET vérifié. Les huit scripts PowerShell passent l’analyse syntaxique sous 5.1 et 7.6. |
+| Cycle de vie x64 | **21/21** après correction de l’installateur. L’essai supplémentaire exerce le rollback vers un collecteur sans tâche de surveillance ni inscription de démarrage récente. Les autres étapes couvrent notamment la reprise après arrêt imprévu ou blocage, les candidats incompatibles et la désinstallation. Voir `lifecycle-final-win-x64.json` et `lifecycle-final-host-observation.json`. Le candidat initial avait passé 20/20. |
+| Mise à jour depuis le ZIP publié 0.10.1 | **Réussi en x64 natif**, en profil isolé. Première collecte, sauvegarde, mise à jour sur place, redémarrage du collecteur, rollback vers l’empreinte publiée et désinstallation. Les octets réseau et ETW de la fixture, le schéma 6 et les réglages sont vérifiés à chaque étape. Le PATH et le collecteur du profil courant sont préservés. Voir `native-upgrade-738942693aa844b19a2d97e2cce0a1cb/evidence.json`. |
+| Mise à jour depuis le ZIP publié 0.3.0 | **Migration SQLite et récupération après échec réussies.** La copie de la base produite par le vrai binaire passe du schéma 0 au schéma 6. La ligne minute et l’état de l’interface sont conservés exactement, soit 39 208 octets reçus et 8 843 envoyés. Les deux bases passent `quick_check`. Le rollback vérifie aussi les empreintes et les inscriptions de démarrage. **Mise à jour réussie avec démarrage automatique non validée**. Le bac à sable n’a pas de moteur VBScript et l’installateur y échoue au lancement du nouveau collecteur. Voir `sandbox-resumed/historical-0.3.0-data-parity.json`, `sandbox-resumed/historical-0.3.0-install-error.txt` et `sandbox-evidence/vbs-probe.txt`. |
+| SQLite, sauvegarde et concurrence | **Réussi.** Douze collectes CLI en concurrence, une sauvegarde pendant les collectes, un archivage manuel de contrôle, un second passage sans doublon et une restauration. Les 8 192 octets reçus et 2 048 envoyés de la fixture sont conservés. Intégrité OK pour les quatre bases contrôlées. La suite Release couvre la rétention automatique, les écritures concurrentes sur compteurs déterministes, le retour d’horloge et les restaurations bloquées ou récupérables avec WAL. Voir `sqlite-smoke-audit.json`. |
+| IPv6 et redémarrage | **Réussi en bac à sable x64.** Le dernier ZIP mesure exactement 4 079 616 octets en émission et en réception TCP, et 5 898 240 dans chaque sens en UDP. Les deux sondes sur `::1` apparaissent dans `apps top`. Après redémarrage avéré, deux appels de collecte manuels réussissent et les totaux sont conservés. Voir `sandbox-resumed/ipv6-audit-win-x64.json` et `sandbox-resumed/reboot-final-win-x64.json`. |
+| ZIP | **Deux ZIP contrôlés**. Lecture intégrale, SHA-256, architecture PE x64 et ARM64 et contenus comparés aux sources, dont `process.ps1`. Voir `zip-audit-verification.json`. |
+| Dashboard | **Réussi en Chromium local** pour la politique HTTP, le rendu du texte, les trois modes et la navigation clavier. Le dossier de l’étape 5 conserve la vérification visuelle à 320 et 1120 px. Cet audit a relancé les tests et mesuré le vrai serveur HTTP local. |
+
+Les deux ZIP historiques x64 utilisés correspondent aux SHA-256 publiés avec les téléchargements GitHub. L’exécutable ancien 0.3.0 utilise son profil Windows réel, ce qui a motivé son exécution exclusivement dans le bac à sable.
+
+Les essais de cycle de vie, de migration et de redémarrage utilisent le ZIP `stage6-final`. Le dernier build `stage6-audit` ajoute le regroupement insensible à la casse entre heures dans `apps monitor`. Les contrôles ZIP, SQLite et IPv6 ont été rejoués avec ce dernier build.
+
+### Mesures hôte x64
+
+Médianes de cinq mesures après deux passages de chauffe sur la même copie de la fixture synthétique de l’étape 5. Les deux builds Release sont dépendants du framework. Les rapports incluent le démarrage du processus. Les mesures HTTP n’incluent pas le rendu du navigateur. Les deux réponses JSON du dashboard mesurent 30 393 octets. Les valeurs sont dans `dashboard-stage5-on-stage6-fixture.json` et `dashboard-stage6.json`.
+
+| Opération | Étape 5 | Étape 6 |
+|---|---:|---:|
+| Horaire | 769 ms | 796 ms |
+| Quotidien | 2 543 ms | 2 526 ms |
+| Hebdomadaire | 5 266 ms | 5 170 ms |
+| Mensuel | 5 582 ms | 5 311 ms |
+| Total | 1 135 ms | 1 055 ms |
+| Dashboard, HTML | 1,27 ms | 1,39 ms |
+| Dashboard, `GET /api/data` | 1 490 ms | 1 522 ms |
+
+Les timings varient entre les passages. Les écarts observés restent faibles et le code des rapports et du dashboard est identique à celui de l’étape 5.
+
+### Commits locaux
+
+| Commit | Objet |
+|---|---|
+| `cfa912c` | Délai de lecture des flux lors de la vérification de version. |
+| `558619c`, `88fc32b` | Attribution ETW par heure UTC et regroupement par application. |
+| `3f72301` | Normalisation des dates de preuve du redémarrage. |
+| `dd8cee6` | Préparation des contrôles GitHub Actions sur la branche d’audit. |
+| `00f0188` | Restauration des inscriptions Windows du collecteur sur rollback. |
+| `6371bfa` | Fiabilité des essais Chromium et du nettoyage des profils temporaires. |
+
+### Avant publication
+
+La validation native ARM64 et la migration complète depuis 0.3.0 avec démarrage automatique restent à obtenir. Le workflow `Build` est préparé pour la branche d’audit avec permissions de lecture et déclenche les deux jobs natifs après un push autorisé. Le workflow `Release` reste déclenché par tag `v*`.
+
+Les bascules réelles Wi-Fi/Ethernet, VPN et les sorties de veille ou d’hibernation restent non exécutées. L’avertissement au premier lancement d’un ZIP téléchargé est à vérifier manuellement. Le cycle x64 vérifie le marquage Internet simulé et le retrait de la marque lors de l’installation. L’accessibilité avec un lecteur d’écran dédié et le parcours de mise à jour via une release GitHub 0.11.0 restent à vérifier.
+
+**Avis de publication** — Attendre le résultat ARM64 natif et un essai de mise à jour depuis 0.3.0 jusqu’à la première collecte sur un Windows x64 de test avec le moteur VBScript. Le passage de WinGet de 0.3.0 à 0.11.0 reste à traiter après la publication GitHub.
+
 ## Clôture locale de l’étape 5 — 2026-11-17
 
 Branche `audit/0.11.0`, binaire `0.10.1`, schéma SQLite 6. Les preuves locales sont dans `artifacts/stage5/`.
