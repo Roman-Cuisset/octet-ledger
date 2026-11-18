@@ -59,6 +59,11 @@ $removeFixture = $false
 function Hash-Id([string]$Id) {
     return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Id)))
 }
+function Read-Timestamp($Value) {
+    # ConvertFrom-Json can already materialize ISO timestamps as DateTime objects.
+    if ($Value -is [datetime]) { return [DateTimeOffset]::new($Value) }
+    return [DateTimeOffset]::Parse($Value, [Globalization.CultureInfo]::InvariantCulture)
+}
 function Read-Snapshot {
     $adapters = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | ForEach-Object {
         $adapter = $_
@@ -166,16 +171,19 @@ try {
             $after = Read-Snapshot
             $evidence.scenario = $state.scenario; $evidence.version = $state.version; $evidence.executableSha256 = $state.executableSha256
             $evidence.architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-            $evidence.before = @{ utc = $state.prepared.utc; bootUtc = $state.prepared.bootUtc; sessionId = $state.prepared.sessionId }
+            $preparedUtc = (Read-Timestamp $state.prepared.utc).ToUniversalTime()
+            $previousBoot = (Read-Timestamp $state.prepared.bootUtc).ToUniversalTime()
+            $currentBoot = (Read-Timestamp $after.bootUtc).ToUniversalTime()
+            $evidence.before = @{ utc = $preparedUtc.ToString('O'); bootUtc = $previousBoot.ToString('O'); sessionId = $state.prepared.sessionId }
             $evidence.after = @{ utc = $after.utc; bootUtc = $after.bootUtc; sessionId = $after.sessionId }
             $performed = $false
             switch ($state.scenario) {
                 'adapter-switch' { $performed = -not (Is-Up $after $state.fromInterfaceId) -and (Is-Up $after $state.toInterfaceId) }
                 'vpn-on' { $performed = -not (Is-Up $state.prepared $state.interfaceId) -and (Is-Up $after $state.interfaceId) }
                 'vpn-off' { $performed = (Is-Up $state.prepared $state.interfaceId) -and -not (Is-Up $after $state.interfaceId) }
-                'reboot' { $performed = $after.bootUtc -ne $state.prepared.bootUtc }
+                'reboot' { $performed = $currentBoot -ne $previousBoot }
                 { $_ -in @('sleep', 'hibernate') } {
-                    try { $events = @(Read-PowerEvents ([DateTimeOffset]::Parse($state.prepared.utc))) }
+                    try { $events = @(Read-PowerEvents $preparedUtc) }
                     catch {
                         if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { $events = @() }
                         else { throw 'System power event evidence could not be read; use an account allowed to read the System event log.' }
@@ -183,7 +191,7 @@ try {
                     $target = if ($state.scenario -eq 'hibernate') { '5' } else { '4' }
                     $suspend = @($events | Where-Object { $_.id -eq 42 -and $_.targetState -eq $target } | Sort-Object utc | Select-Object -First 1)
                     $wake = @($events | Where-Object { $_.id -in @(1, 107) -and $suspend.Count -gt 0 -and $_.utc -gt $suspend[0].utc })
-                    $performed = $suspend.Count -gt 0 -and $wake.Count -gt 0 -and $after.bootUtc -eq $state.prepared.bootUtc
+                    $performed = $suspend.Count -gt 0 -and $wake.Count -gt 0 -and $currentBoot -eq $previousBoot
                     $evidence.powerEvents = $events
                 }
             }
@@ -214,7 +222,7 @@ try {
                 throw 'The newly active adapter has no consumer-visible measured interval after two actual collections.'
             }
             $continuous = 0
-            $elapsed = ([DateTimeOffset]::Parse($after.utc) - [DateTimeOffset]::Parse($state.prepared.utc)).TotalSeconds
+            $elapsed = ((Read-Timestamp $after.utc) - $preparedUtc).TotalSeconds
             foreach ($oldAdapter in $state.prepared.adapters) {
                 $newAdapter = Read-Adapter $after $oldAdapter.id
                 if ($oldAdapter.status -eq 'Up' -and $newAdapter.status -eq 'Up' -and $oldAdapter.type -ne 'Loopback' -and
