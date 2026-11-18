@@ -1,5 +1,28 @@
 # Handoff — OctetLedger 0.11.0
 
+## Étape 7 — préparation de la publication — 2026-11-18
+
+Le commit local `68cd372` fixe la version du CLI à `0.11.0`, finalise le README et le changelog et relie les [notes de publication](release-notes/v0.11.0.md) au workflow `Release`. Les binaires préparés portent la version fichier `0.11.0.0` et la version produit `0.11.0+68cd372c1d71c63ca3c6010361a28e2d7c6c7111`. Le CLI x64 affiche `OctetLedger 0.11.0`.
+
+### Vérifications
+
+- **243/243 tests Release x64**, aucun échec ni test ignoré. Le format .NET et `git diff --check` passent. Rapport `artifacts/stage7/tests/release-win-x64.trx`.
+- **22/22 contrôles du cycle x64 sur le ZIP 0.11.0 exact**, dont panne du collecteur, panne du lanceur, collecteur bloqué, échec de mise à jour, rollback et désinstallation. Le PATH et le collecteur du profil habituel sont restés intacts. Preuves `artifacts/stage7/lifecycle-win-x64.json` et `artifacts/stage7/host-observation.json`.
+- **Deux ZIP locaux vérifiés**. L’architecture PE, la version, le contenu de l’archive et l’empreinte correspondent à chaque build. Les scripts empaquetés, dont `process.ps1`, correspondent aux sources et passent l’analyse sous Windows PowerShell 5.1 et PowerShell 7. Les deux exécutables locaux sont non signés. Preuves `package-verification.json`, `binary-metadata.json` et `installer-syntax.txt` dans `artifacts/stage7/`.
+- **Passage du ZIP officiel 0.10.1 à 0.11.0 sur x64**, via `install.cmd`, avec collecte, rollback vers le binaire publié et désinstallation via `uninstall.cmd`. Les réglages et les volumes de la fixture sont conservés. Le schéma SQLite reste à 6. Preuve `artifacts/stage7/native-upgrade-4859856e9517448589bd09a5d51fb5e4/evidence.json`.
+- **Migration SQLite depuis 0.3.0 vérifiée sur le binaire 0.11.0**. Le rapport et le contrôle d’intégrité ont ouvert une copie de la base de l’ancien binaire. L’état de l’interface et la ligne minute sont préservés, avec 39 208 octets reçus et 8 843 envoyés. Le scénario complet d’installation avec VBScript et les cycles natifs x64 et ARM64 ont réussi à l’étape 6B sur le code audité avant changement de version. Preuve locale `artifacts/stage7/legacy-0.3.0-database-proof.json`. [CI native de l’étape 6B](https://github.com/Roman-Cuisset/octet-ledger/actions/runs/44295775137)
+
+| ZIP local | SHA-256 |
+|---|---|
+| `OctetLedger-0.11.0-win-x64.zip` | `7beafbad6f23b9cb0fa82be2b4492b2d9e1e323cdee07528c3fd226721f9d277` |
+| `OctetLedger-0.11.0-win-arm64.zip` | `aa4e6ab81b01db34b2b6bfeb5645a86d7d5886768db91df279eecd254447beb7` |
+
+Les archives et leurs fichiers `.sha256` sont dans `artifacts/stage7/packages/`. Le workflow officiel reconstruira les packages sur les runners Windows. Les empreintes des fichiers effectivement publiés serviront à la mise à jour ultérieure de WinGet.
+
+### Publication après autorisation
+
+`main` distant pointe sur `b1cbe5c`, ancêtre de la branche de travail, et le tag `v0.11.0` est disponible. Le flux préparé est un merge en avance rapide vers `main`, le push de `main`, puis la création et le push du tag annoté `v0.11.0` sur ce commit. Le workflow `Release` vérifie la concordance entre le tag et le projet, exécute les tests et cycles natifs x64 et ARM64 sur les ZIP reconstruits, puis publie les deux ZIP, les fichiers SHA-256 et les notes versionnées. La commande finale a été simulée avec un faux `gh` et transmet le bon tag, les quatre assets et les notes. La validation native ARM64 du ZIP exact 0.11.0 et la vérification des assets GitHub se feront dans ce flux. WinGet reste hors de cette étape.
+
 ## Étape 6B — validations natives Windows et migration 0.3.0 — 2026-11-18
 
 Le workflow `Build` a été déclenché sur la seule branche `audit/0.11.0`. Le passage de référence teste le commit `6d566bd5b7792b5083662f310cb29cf7851f853a`. Le binaire issu de cette branche affiche `0.10.1` et le candidat conserve le schéma SQLite 6. [Passage de référence GitHub Actions](https://github.com/Roman-Cuisset/octet-ledger/actions/runs/44295775137)
