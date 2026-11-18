@@ -56,11 +56,11 @@ internal static class ApplicationTrafficCommand
             return 1;
         }
 
-        var totals = new ConcurrentDictionary<string, Counters>(StringComparer.OrdinalIgnoreCase);
+        var capture = new ApplicationTrafficCapture();
         var names = new ConcurrentDictionary<int, string>();
         using var session = new TraceEventSession($"OctetLedger-Applications-{Environment.ProcessId}");
         session.StopOnDispose = true;
-        void Add(int processId, int size, bool received)
+        void Add(DateTime timestamp, int processId, int size, bool received)
         {
             if (processId <= 0 || size <= 0) return;
             var name = names.GetOrAdd(processId, id =>
@@ -74,23 +74,21 @@ internal static class ApplicationTrafficCommand
                 catch (InvalidOperationException) { return "unknown-process"; }
                 catch (System.ComponentModel.Win32Exception) { return "unknown-process"; }
             });
-            totals.AddOrUpdate(name,
-                _ => received ? new Counters(size, 0) : new Counters(0, size),
-                (_, current) => received ? current with { Received = current.Received + size } : current with { Sent = current.Sent + size });
+            capture.Record(timestamp, name, size, received);
         }
         // Accessing Source can start the session, so enable the kernel provider first.
         session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP | KernelTraceEventParser.Keywords.Process);
         var source = session.Source;
         source.Kernel.ProcessStart += data => names[data.ProcessID] = NormalizeProcessName(data.ProcessName);
         source.Kernel.ProcessStop += data => names.TryRemove(data.ProcessID, out _);
-        source.Kernel.TcpIpRecv += data => Add(data.ProcessID, data.size, true);
-        source.Kernel.TcpIpSend += data => Add(data.ProcessID, data.size, false);
-        source.Kernel.UdpIpRecv += data => Add(data.ProcessID, data.size, true);
-        source.Kernel.UdpIpSend += data => Add(data.ProcessID, data.size, false);
-        source.Kernel.TcpIpRecvIPV6 += data => Add(data.ProcessID, data.size, true);
-        source.Kernel.TcpIpSendIPV6 += data => Add(data.ProcessID, data.size, false);
-        source.Kernel.UdpIpRecvIPV6 += data => Add(data.ProcessID, data.size, true);
-        source.Kernel.UdpIpSendIPV6 += data => Add(data.ProcessID, data.size, false);
+        source.Kernel.TcpIpRecv += data => Add(data.TimeStamp, data.ProcessID, data.size, true);
+        source.Kernel.TcpIpSend += data => Add(data.TimeStamp, data.ProcessID, data.size, false);
+        source.Kernel.UdpIpRecv += data => Add(data.TimeStamp, data.ProcessID, data.size, true);
+        source.Kernel.UdpIpSend += data => Add(data.TimeStamp, data.ProcessID, data.size, false);
+        source.Kernel.TcpIpRecvIPV6 += data => Add(data.TimeStamp, data.ProcessID, data.size, true);
+        source.Kernel.TcpIpSendIPV6 += data => Add(data.TimeStamp, data.ProcessID, data.size, false);
+        source.Kernel.UdpIpRecvIPV6 += data => Add(data.TimeStamp, data.ProcessID, data.size, true);
+        source.Kernel.UdpIpSendIPV6 += data => Add(data.TimeStamp, data.ProcessID, data.size, false);
         Console.WriteLine($"Capturing estimated per-application payload bytes for up to {seconds} seconds. Press Ctrl+C to stop.");
         Console.WriteLine("Only this explicit monitoring window is recorded; totals may differ from interface counters.");
         var processing = Task.Run(() => source.Process());
@@ -114,9 +112,10 @@ internal static class ApplicationTrafficCommand
             session.Stop();
         }
         await processing;
-        var rows = totals.Select(pair => new ApplicationTrafficRow(pair.Key, pair.Value.Received, pair.Value.Sent)).ToArray();
-        ApplicationTrafficStore.Add(DateTimeOffset.UtcNow, rows);
-        Console.WriteLine($"Recorded {ByteFormatter.Format(rows.Sum(row => row.TotalBytes))} across {rows.Length} applications.");
+        var rows = capture.GetRows().ToArray();
+        ApplicationTrafficStore.Add(rows);
+        var applications = rows.Select(entry => entry.Row.ProcessName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        Console.WriteLine($"Recorded {ByteFormatter.Format(rows.Sum(entry => entry.Row.TotalBytes))} across {applications} applications.");
         return 0;
     }
 
@@ -127,5 +126,24 @@ internal static class ApplicationTrafficCommand
         return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name : name + ".exe";
     }
     private static int Usage() { Console.Error.WriteLine("Usage: octetledger apps [top [--days N] [--count N]|monitor [--seconds N]]"); return 2; }
-    private sealed record Counters(long Received, long Sent);
+}
+
+internal sealed class ApplicationTrafficCapture
+{
+    private readonly ConcurrentDictionary<DateTimeOffset, ConcurrentDictionary<string, ApplicationTrafficRow>> hours = new();
+
+    public void Record(DateTimeOffset timestamp, string processName, int size, bool received)
+    {
+        var utc = timestamp.UtcDateTime;
+        var hour = new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero);
+        var totals = hours.GetOrAdd(hour, static _ => new(StringComparer.OrdinalIgnoreCase));
+        totals.AddOrUpdate(processName,
+            name => received ? new(name, size, 0) : new(name, 0, size),
+            (_, current) => received
+                ? current with { BytesReceived = current.BytesReceived + size }
+                : current with { BytesSent = current.BytesSent + size });
+    }
+
+    public IEnumerable<(DateTimeOffset CapturedAt, ApplicationTrafficRow Row)> GetRows() =>
+        hours.SelectMany(hour => hour.Value.Values.Select(row => (hour.Key, row)));
 }

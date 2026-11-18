@@ -10,11 +10,14 @@ public sealed record ApplicationTrafficRow(string ProcessName, long BytesReceive
 
 public static class ApplicationTrafficStore
 {
-    public static void Add(DateTimeOffset capturedAt, IEnumerable<ApplicationTrafficRow> rows, string? databasePath = null)
+    public static void Add(DateTimeOffset capturedAt, IEnumerable<ApplicationTrafficRow> rows, string? databasePath = null) =>
+        Add(rows.Select(row => (capturedAt, row)), databasePath);
+
+    public static void Add(IEnumerable<(DateTimeOffset CapturedAt, ApplicationTrafficRow Row)> rows, string? databasePath = null)
     {
         using var connection = Open(databasePath);
         using var transaction = connection.BeginTransaction();
-        foreach (var row in rows.Where(row => row.TotalBytes > 0))
+        foreach (var (capturedAt, row) in rows.Where(entry => entry.Row.TotalBytes > 0))
         {
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
