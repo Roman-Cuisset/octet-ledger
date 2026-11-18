@@ -130,20 +130,23 @@ internal static class ApplicationTrafficCommand
 
 internal sealed class ApplicationTrafficCapture
 {
-    private readonly ConcurrentDictionary<DateTimeOffset, ConcurrentDictionary<string, ApplicationTrafficRow>> hours = new();
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<DateTimeOffset, Counters>> applications = new(StringComparer.OrdinalIgnoreCase);
 
     public void Record(DateTimeOffset timestamp, string processName, int size, bool received)
     {
         var utc = timestamp.UtcDateTime;
         var hour = new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero);
-        var totals = hours.GetOrAdd(hour, static _ => new(StringComparer.OrdinalIgnoreCase));
-        totals.AddOrUpdate(processName,
-            name => received ? new(name, size, 0) : new(name, 0, size),
+        var totals = applications.GetOrAdd(processName, static _ => new());
+        totals.AddOrUpdate(hour,
+            _ => received ? new(size, 0) : new(0, size),
             (_, current) => received
-                ? current with { BytesReceived = current.BytesReceived + size }
-                : current with { BytesSent = current.BytesSent + size });
+                ? current with { Received = current.Received + size }
+                : current with { Sent = current.Sent + size });
     }
 
     public IEnumerable<(DateTimeOffset CapturedAt, ApplicationTrafficRow Row)> GetRows() =>
-        hours.SelectMany(hour => hour.Value.Values.Select(row => (hour.Key, row)));
+        applications.SelectMany(application => application.Value.Select(hour =>
+            (hour.Key, new ApplicationTrafficRow(application.Key, hour.Value.Received, hour.Value.Sent))));
+
+    private sealed record Counters(long Received, long Sent);
 }

@@ -15,7 +15,7 @@ public sealed class ApplicationTrafficTests
             var capture = new ApplicationTrafficCapture();
             capture.Record(midnight.AddSeconds(-1).ToOffset(TimeSpan.FromHours(2)), "browser.exe", 100, received: true);
             capture.Record(midnight.AddMilliseconds(-100), "BROWSER.exe", 50, received: false);
-            capture.Record(midnight, "browser.exe", 75, received: false);
+            capture.Record(midnight, "BROWSER.exe", 75, received: false);
             capture.Record(midnight.AddSeconds(1), "browser.exe", 25, received: true);
             ApplicationTrafficStore.Add(capture.GetRows(), path);
 
