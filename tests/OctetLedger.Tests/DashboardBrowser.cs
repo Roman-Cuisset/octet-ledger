@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using OctetLedger.Cli;
@@ -36,7 +37,8 @@ internal static class DashboardBrowser
         var url = $"http://127.0.0.1:{port}/";
         listener.Prefixes.Add(url);
         listener.Start();
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var timeoutSeconds = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? 120 : 60;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
         var server = ServeAsync(listener, verification, JsonSerializer.SerializeToUtf8Bytes(payload), cancellation.Token);
         using var browser = new Process
         {
@@ -73,7 +75,7 @@ internal static class DashboardBrowser
         }
         catch (OperationCanceledException exception) when (cancellation.IsCancellationRequested)
         {
-            throw new TimeoutException($"Chromium did not finish dashboard verification in 60 seconds (viewport {viewportWidth}px).", exception);
+            throw new TimeoutException($"Chromium did not finish dashboard verification in {timeoutSeconds} seconds (viewport {viewportWidth}px).", exception);
         }
         finally
         {
