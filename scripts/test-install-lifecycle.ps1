@@ -37,7 +37,7 @@ function Get-Sha256Hex([string]$Path) {
 function Copy-ItemWithRetry([string]$Source, [string]$Destination) {
     for ($attempt = 1; $attempt -le 20; $attempt++) {
         try {
-            Copy-Item -LiteralPath $Source -Destination $Destination -Force
+            Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
             return
         }
         catch {
@@ -205,7 +205,9 @@ try {
     # Reject a broken rollback candidate before stopping or replacing the working version.
     $savedRollback = Join-Path $testRoot 'saved-rollback.exe'
     Copy-Item -LiteralPath $rollbackExecutable -Destination $savedRollback
-    Set-Content -LiteralPath $rollbackExecutable -Value 'invalid executable' -Encoding Ascii
+    $invalidRollback = Join-Path $testRoot 'invalid-rollback.exe'
+    Set-Content -LiteralPath $invalidRollback -Value 'invalid executable' -Encoding Ascii
+    Copy-ItemWithRetry $invalidRollback $rollbackExecutable
     $rollbackRejected = $false
     try { & $installedRollback } catch { $rollbackRejected = $true }
     if (-not $rollbackRejected -or (Get-Sha256Hex $installedExecutable) -ne $updatedHash) {
