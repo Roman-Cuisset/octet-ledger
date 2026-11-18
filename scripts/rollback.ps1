@@ -55,17 +55,8 @@ try {
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
         }
 
-    for ($attempt = 1; $attempt -le 20; $attempt++) {
-        try {
-            [System.IO.File]::Replace($previousExecutable, $installedExecutable, $failedExecutable, $true)
-            $replacementMade = $true
-            break
-        }
-        catch {
-            if ($attempt -eq 20) { throw }
-            Start-Sleep -Milliseconds 250
-        }
-    }
+    Replace-OctetLedgerExecutable $previousExecutable $installedExecutable $failedExecutable
+    $replacementMade = $true
     # The selected previous binary passed version and database compatibility validation.
     Unblock-File -LiteralPath $installedExecutable
     $version = Invoke-OctetLedgerExecutable $installedExecutable @('version') $ExecutableTimeoutSeconds
@@ -81,7 +72,7 @@ catch {
     if ($replacementMade -and (Test-Path -LiteralPath $failedExecutable)) {
         try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'uninstall') $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not unregister the failed rollback: $_" }
         try {
-            [System.IO.File]::Replace($failedExecutable, $installedExecutable, $previousExecutable, $true)
+            Replace-OctetLedgerExecutable $failedExecutable $installedExecutable $previousExecutable
             Unblock-File -LiteralPath $installedExecutable
         }
         catch {

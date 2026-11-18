@@ -1,4 +1,22 @@
 # Shared by the packaged installer and installed rollback script (Windows PowerShell 5.1+).
+function Replace-OctetLedgerExecutable {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [Parameter(Mandatory = $true)][string]$Backup
+    )
+    for ($attempt = 1; $attempt -le 20; $attempt++) {
+        try {
+            [System.IO.File]::Replace($Source, $Destination, $Backup, $true)
+            return
+        }
+        catch {
+            if ($attempt -eq 20) { throw }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+}
+
 function Invoke-OctetLedgerExecutable {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,

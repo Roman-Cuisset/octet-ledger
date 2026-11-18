@@ -125,6 +125,45 @@ try {
     New-Item -ItemType Directory -Path $packageDirectory -Force | Out-Null
     New-Item -ItemType Directory -Path $testLocalAppData -Force | Out-Null
     Expand-Archive -LiteralPath $resolvedPackage -DestinationPath $packageDirectory
+    . (Join-Path $packageDirectory 'process.ps1')
+    $restoreSource = Join-Path $testRoot 'restore-source.fixture'
+    $restoreDestination = Join-Path $testRoot 'restore-destination.fixture'
+    $restoreBackup = Join-Path $testRoot 'restore-backup.fixture'
+    $lockReady = Join-Path $testRoot 'restore-locked.fixture'
+    $lockChecked = Join-Path $testRoot 'restore-lock-checked.fixture'
+    Set-Content -LiteralPath $restoreSource -Value 'working binary'
+    Set-Content -LiteralPath $restoreDestination -Value 'rejected binary'
+    $holder = Start-ThreadJob -ArgumentList $restoreDestination, $lockReady, $lockChecked -ScriptBlock {
+        param($Destination, $ReadyPath, $CheckedPath)
+        $handle = [IO.File]::Open($Destination, 'Open', 'ReadWrite', 'None')
+        try {
+            Set-Content -LiteralPath $ReadyPath -Value 'locked'
+            for ($attempt = 0; $attempt -lt 100 -and -not (Test-Path -LiteralPath $CheckedPath); $attempt++) {
+                Start-Sleep -Milliseconds 50
+            }
+            Start-Sleep -Milliseconds 500
+        }
+        finally { $handle.Dispose() }
+    }
+    try {
+        for ($attempt = 0; $attempt -lt 100 -and -not (Test-Path -LiteralPath $lockReady); $attempt++) {
+            Start-Sleep -Milliseconds 50
+        }
+        if (-not (Test-Path -LiteralPath $lockReady)) { throw 'The rollback sharing violation fixture did not start.' }
+        $initialReplaceBlocked = $false
+        try { [IO.File]::Replace($restoreSource, $restoreDestination, $restoreBackup, $true) }
+        catch [IO.IOException] { $initialReplaceBlocked = $true }
+        if (-not $initialReplaceBlocked) { throw 'The rollback fixture did not reproduce a sharing violation.' }
+        Set-Content -LiteralPath $lockChecked -Value 'sharing violation confirmed'
+        Replace-OctetLedgerExecutable $restoreSource $restoreDestination $restoreBackup
+        if ((Get-Content -LiteralPath $restoreDestination -Raw).Trim() -ne 'working binary' -or
+            (Get-Content -LiteralPath $restoreBackup -Raw).Trim() -ne 'rejected binary') { throw 'Retry did not restore the working binary and preserve its backup.' }
+        Record-Step 'atomic-rollback-recovery-retries-a-file-sharing-violation'
+    }
+    finally {
+        if (-not (Wait-Job -Job $holder -Timeout 5)) { Stop-Job -Job $holder }
+        Receive-Job -Job $holder -Wait -AutoRemoveJob
+    }
     $downloadExecutable = Join-Path $packageDirectory 'octetledger.exe'
     Set-Content -LiteralPath $downloadExecutable -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
     Set-Content -LiteralPath $downloadExecutable -Stream lifecycle-metadata -Value 'retained metadata'
@@ -504,13 +543,13 @@ finally {
     $env:OCTETLEDGER_VALIDATION_MODE = $originalValidationMode
     $env:OCTETLEDGER_VALIDATION_PID_FILE = $originalValidationPid
     [Environment]::SetEnvironmentVariable('Path', $originalUserPath, 'User')
-    if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
     $evidence.completedUtc = [DateTimeOffset]::UtcNow.ToString('O')
     if (-not [string]::IsNullOrWhiteSpace($EvidencePath)) {
         $resolvedEvidence = [System.IO.Path]::GetFullPath($EvidencePath)
         New-Item -ItemType Directory -Path (Split-Path -Parent $resolvedEvidence) -Force | Out-Null
         $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $resolvedEvidence -Encoding utf8
     }
+    if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
     if ($evidence.status -eq 'pass') {
         $global:LASTEXITCODE = 0
     }
