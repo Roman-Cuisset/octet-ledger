@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
@@ -167,6 +168,51 @@ public class UpdateTests
         await Assert.ThrowsAsync<TimeoutException>(() =>
             UpdateInstaller.ReadProcessOutputAsync(process, TimeSpan.FromMilliseconds(100)));
         Assert.True(process.HasExited);
+    }
+
+    [Fact]
+    public async Task VersionProbeTimesOutWhenChildKeepsOutputOpenAfterParentExit()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var pidFile = Path.Combine(Path.GetTempPath(), $"octetledger-probe-{Guid.NewGuid():N}.pid");
+        var start = new System.Diagnostics.ProcessStartInfo("powershell.exe")
+        {
+            ArgumentList =
+            {
+                "-NoProfile", "-Command",
+                "$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 90' -NoNewWindow -PassThru; " +
+                "[IO.File]::WriteAllText($env:OCTETLEDGER_PROBE_PID, $child.Id.ToString())"
+            },
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        start.Environment["OCTETLEDGER_PROBE_PID"] = pidFile;
+        using var parent = System.Diagnostics.Process.Start(start)!;
+        try
+        {
+            await parent.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(45));
+            Assert.Equal(0, parent.ExitCode);
+            var probe = UpdateInstaller.ReadProcessOutputAsync(parent, TimeSpan.FromMilliseconds(150));
+            Assert.Same(probe, await Task.WhenAny(probe, Task.Delay(TimeSpan.FromSeconds(3))));
+            await Assert.ThrowsAsync<TimeoutException>(() => probe);
+        }
+        finally
+        {
+            if (!parent.HasExited) parent.Kill(entireProcessTree: true);
+            if (File.Exists(pidFile))
+            {
+                try
+                {
+                    using var child = System.Diagnostics.Process.GetProcessById(int.Parse(File.ReadAllText(pidFile), CultureInfo.InvariantCulture));
+                    if (!child.HasExited && child.StartTime >= parent.StartTime) child.Kill();
+                }
+                catch (ArgumentException) { }
+                finally { File.Delete(pidFile); }
+            }
+        }
     }
 
     [Fact]

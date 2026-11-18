@@ -154,20 +154,28 @@ internal sealed partial class UpdateInstaller
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
-        var output = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-        var error = process.StandardError.ReadToEndAsync(CancellationToken.None);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
+        var output = process.StandardOutput.ReadToEndAsync(deadline.Token);
+        var error = process.StandardError.ReadToEndAsync(deadline.Token);
         try
         {
-            await process.WaitForExitAsync(deadline.Token);
+            await Task.WhenAll(process.WaitForExitAsync(deadline.Token), output, error).WaitAsync(deadline.Token);
             return (await output, await error);
         }
         catch (OperationCanceledException)
         {
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-            await process.WaitForExitAsync(CancellationToken.None);
-            await Task.WhenAll(output, error);
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync(CancellationToken.None)
+                        .WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
+                }
+            }
+            catch (InvalidOperationException) { }
+            catch (TimeoutException) { }
             cancellationToken.ThrowIfCancellationRequested();
             throw new TimeoutException("The downloaded executable did not complete version validation.");
         }
