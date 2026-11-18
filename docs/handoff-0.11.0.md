@@ -1,5 +1,24 @@
 # Handoff — OctetLedger 0.11.0
 
+## Étape 6B — validations natives Windows et migration 0.3.0 — 2026-11-18
+
+Le workflow `Build` a été déclenché sur la seule branche `audit/0.11.0`. Le passage de référence teste le commit `6d566bd5b7792b5083662f310cb29cf7851f853a`. Le binaire issu de cette branche affiche `0.10.1` et le candidat conserve le schéma SQLite 6. [Passage de référence GitHub Actions](https://github.com/Roman-Cuisset/octet-ledger/actions/runs/44295775137)
+
+| Environnement natif | Tests Release | Cycle de vie |
+|---|---:|---:|
+| Windows x64 | **243/243**, aucun test ignoré | **22/22**. [Rapports x64](https://github.com/Roman-Cuisset/octet-ledger/actions/runs/44295775137/artifacts/14424671046) |
+| Windows 11 ARM64 | **243/243**, aucun test ignoré | **22/22**. [Rapports ARM64](https://github.com/Roman-Cuisset/octet-ledger/actions/runs/44295775137/artifacts/14424231582) |
+
+Sur les deux architectures, le workflow a vérifié l’architecture native du runner et du runtime .NET, construit puis lancé l’exécutable du ZIP et validé l’installation, la collecte, la mise à jour, les rollbacks, les reprises du collecteur et la désinstallation. Les rapports TRX et JSON sont aussi archivés dans `artifacts/stage6b/run-44295775137/`.
+
+La migration depuis le ZIP GitHub officiel `v0.3.0` est validée sur un runner jetable Windows Server 2022 x64, avec vérification préalable du moteur VBScript et de l’empreinte publiée du ZIP. L’installateur a démarré le collecteur sans appel manuel à `collector start`. Le même processus a enregistré deux collectes à **60,44 secondes** d’intervalle. Les réglages et les volumes historiques de la fixture sont conservés pendant le passage du schéma 0 au schéma 6. Le rollback après échec injecté et le rollback explicite après la migration restaurent le binaire officiel et le démarrage du collecteur en conservant les données. Le script refuse l’exécution si le profil GitHub hébergé contient déjà une installation. [Preuve de migration](https://github.com/Roman-Cuisset/octet-ledger/actions/runs/44295775137/artifacts/14423114470)
+
+Les premiers passages ont isolé deux défauts dans la préparation du test du délai de mise à jour. Le SDK ARM64 refusait le minuteur de garde avec CA2027. Le lancement du processus enfant a ensuite dépassé son délai sur les deux runners. Le test final maintient un vrai tube de sortie ouvert après la sortie du processus, sans dépendre du lancement de cet enfant. Le calcul du délai d’exécution et de lecture reste le même. Les 15 tests de mise à jour ciblés et la suite Release locale **243/243** passent. [Premier passage](https://github.com/Roman-Cuisset/octet-ledger/actions/runs/44292090421) · [Deuxième passage](https://github.com/Roman-Cuisset/octet-ledger/actions/runs/44292922922)
+
+Les cycles ont ensuite exposé deux verrous distincts. Le banc x64 réessaie la copie de la fixture de rollback en cas de verrou temporaire. Sur ARM64, un verrou a empêché le script livré de remettre en place le binaire courant après le rejet du candidat de rollback. La restauration réutilise désormais le remplacement atomique borné de la première permutation. Le test Windows maintient un vrai verrou, vérifie l’échec d’un remplacement unique puis la restauration et la conservation de la sauvegarde après nouvelle tentative. Le test ciblé passe sous PowerShell 7 et Windows PowerShell 5.1. Les rapports de cycle sont conservés si le nettoyage de la fixture échoue. [Échec x64 du banc](https://github.com/Roman-Cuisset/octet-ledger/actions/runs/44293808945) · [Échec ARM64 du rollback](https://github.com/Roman-Cuisset/octet-ledger/actions/runs/44294749599)
+
+**Avis de publication** — Les deux blocages de l’étape 6 sont levés. Le candidat peut passer à la publication 0.11.0. Les transitions matérielles listées dans l’audit, le premier lancement d’un ZIP téléchargé et le parcours avec un lecteur d’écran restent non exécutés. Le parcours de mise à jour depuis l’artefact GitHub étiqueté 0.11.0 dépend de la future publication. Le numéro de version et WinGet sont hors de cette étape.
+
 ## Audit final de l’étape 6 — 2026-11-18
 
 Branche `audit/0.11.0`. Les ZIP de validation contiennent des binaires qui affichent encore `0.10.1` et utilisent le schéma SQLite 6. Les preuves reproductibles de cette étape sont dans `artifacts/stage6/`.
