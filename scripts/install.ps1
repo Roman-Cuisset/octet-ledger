@@ -146,8 +146,9 @@ try {
 catch {
     $failure = $_
     if ($hadExistingInstallation) {
+        $restartAction = 'start'
         if ($replacementMade -and (Test-Path -LiteralPath $operationBackup)) {
-            try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'stop') $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not stop the rejected version: $_" }
+            try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'uninstall') $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not unregister the rejected version: $_" }
             Get-CimInstance Win32_Process -Filter "Name='octetledger.exe'" -ErrorAction SilentlyContinue |
                 Where-Object {
                     $_.ExecutablePath -eq $installedExecutable -and
@@ -168,8 +169,10 @@ catch {
                 }
             }
             Unblock-File -LiteralPath $installedExecutable
+            # The rejected version may have replaced the prior launcher or changed its registration.
+            $restartAction = 'install'
         }
-        try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'start') $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not restart the preserved version: $_" }
+        try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', $restartAction) $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not restart the preserved version: $_" }
     } elseif ($replacementMade) {
         try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'uninstall') $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not unregister the failed installation: $_" }
         Remove-Item -LiteralPath $installedExecutable -Force -ErrorAction SilentlyContinue

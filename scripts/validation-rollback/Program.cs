@@ -19,6 +19,13 @@ if (mode == "hang-version" && version || mode == "hang-install" && installing ||
 }
 if (mode == "fail-install" && installing)
 {
+    var marker = Environment.GetEnvironmentVariable("OCTETLEDGER_VALIDATION_PID_FILE");
+    if (marker is not null)
+    {
+        var profile = Path.Combine(Path.GetDirectoryName(marker)!, "localappdata");
+        if (string.Equals(Environment.GetEnvironmentVariable("LOCALAPPDATA"), profile, StringComparison.OrdinalIgnoreCase))
+            File.WriteAllText(Path.Combine(profile, "OctetLedger", "collector.vbs"), "' Incomplete candidate launcher\r\n");
+    }
     Console.Error.WriteLine("Validation fixture rejected collector installation.");
     return 42;
 }

@@ -64,8 +64,24 @@ function Assert-PreservedInstallation([string]$ExpectedHash) {
     if ($LASTEXITCODE -ne 0) { throw 'Installation or rollback lost existing application statistics.' }
     Assert-InstalledZoneMarker
 }
+function Assert-NoCollectorRegistration([string]$Operation) {
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        & schtasks.exe /Query /TN $watchdogTaskName 2>$null | Out-Null
+        $taskExitCode = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previousPreference }
+    if ($taskExitCode -eq 0) { throw "$Operation retained the independent watchdog task." }
+    $startup = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+    if ($null -ne $startup -and $null -ne $startup.PSObject.Properties[$startupValueName]) {
+        throw "$Operation retained the startup registry value."
+    }
+}
 function Test-CandidateFailure([string]$Operation, [string]$Mode, [scriptblock]$Action, [string]$ExpectedHash) {
     $pidFile = Join-Path $testRoot 'candidate.pid'
+    $launcher = Join-Path $testDataDirectory 'collector.vbs'
+    $launcherHash = Get-Sha256Hex $launcher
     Remove-Item -LiteralPath $pidFile -ErrorAction SilentlyContinue
     $env:OCTETLEDGER_VALIDATION_MODE = $Mode
     $env:OCTETLEDGER_VALIDATION_PID_FILE = $pidFile
@@ -89,6 +105,7 @@ function Test-CandidateFailure([string]$Operation, [string]$Mode, [scriptblock]$
         if (Get-Process -Id $candidatePid -ErrorAction SilentlyContinue) { throw 'The timed-out executable is still running.' }
     }
     Assert-PreservedInstallation $ExpectedHash
+    if ((Get-Sha256Hex $launcher) -ne $launcherHash) { throw "$Operation failed to restore the working launcher." }
     Record-Step "$Operation-candidate-$Mode-rejected-and-existing-data-preserved"
 }
 $resolvedPackage = (Resolve-Path -LiteralPath $PackagePath).Path
@@ -413,20 +430,7 @@ public static class OctetLedgerLifecycleNative {
     if ($remainingWorkers.Count -ne 0 -or $remainingLaunchers.Count -ne 0) {
         throw 'Uninstall retained an isolated collector or launcher process.'
     }
-    $previousPreference = $ErrorActionPreference
-    $ErrorActionPreference = 'SilentlyContinue'
-    try {
-        & schtasks.exe /Query /TN $watchdogTaskName 2>$null | Out-Null
-        $taskExitCode = $LASTEXITCODE
-    }
-    finally {
-        $ErrorActionPreference = $previousPreference
-    }
-    if ($taskExitCode -eq 0) { throw 'Uninstall retained its independent watchdog task.' }
-    $startup = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
-    if ($null -ne $startup -and $null -ne $startup.PSObject.Properties[$startupValueName]) {
-        throw 'Uninstall retained its startup registry value.'
-    }
+    Assert-NoCollectorRegistration 'Uninstall'
     if (-not (Test-Path -LiteralPath (Join-Path $testDataDirectory 'octetledger.db'))) {
         throw 'Uninstall did not preserve collected statistics.'
     }
@@ -447,6 +451,22 @@ public static class OctetLedgerLifecycleNative {
         throw 'A failed fresh installation retained its PATH entry.'
     }
     Record-Step 'failed-fresh-install-removes-executable-and-path'
+
+    # A compatible legacy collector may not know about either current registration.
+    & $installScript
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $installedExecutable)) { throw 'Legacy rollback setup failed.' }
+    Copy-ItemWithRetry $candidateExecutable $rollbackExecutable
+    $legacyHash = Get-Sha256Hex $rollbackExecutable
+    $env:OCTETLEDGER_VALIDATION_MODE = 'compatible-legacy'
+    try {
+        & $installedRollback
+        Assert-NoCollectorRegistration 'Rollback to a legacy collector'
+        Assert-PreservedInstallation $legacyHash
+        & $uninstallScript
+        if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $installedExecutable)) { throw 'Legacy fixture uninstall failed.' }
+    }
+    finally { Remove-Item Env:OCTETLEDGER_VALIDATION_MODE -ErrorAction SilentlyContinue }
+    Record-Step 'legacy-rollback-removes-newer-registrations-preserves-data'
     $evidence.status = 'pass'
 }
 catch {

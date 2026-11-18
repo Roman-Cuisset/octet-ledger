@@ -41,7 +41,8 @@ if (Test-Path -LiteralPath $databasePath) {
 }
 $replacementMade = $false
 try {
-    Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'stop') $ExecutableTimeoutSeconds | Out-Null
+    # The previous binary may predate the current startup registrations.
+    Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'uninstall') $ExecutableTimeoutSeconds | Out-Null
 
     # Clean up any collector process holding the executable.
     Get-CimInstance Win32_Process -Filter "Name='octetledger.exe'" -ErrorAction SilentlyContinue |
@@ -78,7 +79,7 @@ try {
 catch {
     $failure = $_
     if ($replacementMade -and (Test-Path -LiteralPath $failedExecutable)) {
-        try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'stop') $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not stop the failed rollback: $_" }
+        try { Invoke-OctetLedgerExecutable $installedExecutable @('collector', 'uninstall') $ExecutableTimeoutSeconds | Out-Null } catch { Write-Warning "Could not unregister the failed rollback: $_" }
         try {
             [System.IO.File]::Replace($failedExecutable, $installedExecutable, $previousExecutable, $true)
             Unblock-File -LiteralPath $installedExecutable
