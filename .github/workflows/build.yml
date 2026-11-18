@@ -31,7 +31,14 @@ jobs:
         run: dotnet format OctetLedger.slnx --verify-no-changes --no-restore
 
       - name: Test
-        run: dotnet test --configuration Release --no-build
+        shell: pwsh
+        env:
+          DOTNET_CLI_UI_LANGUAGE: en-US
+        run: |
+          if ($env:RUNNER_ARCH -ne 'X64') { throw "Expected an x64 runner, got $env:RUNNER_ARCH." }
+          $info = (dotnet --info) -join " "
+          if ($info -notmatch 'Architecture:\s*x64\b') { throw "Expected a native x64 .NET runtime. $info" }
+          dotnet test --configuration Release --no-build --results-directory artifacts/validation --logger "trx;LogFileName=release-win-x64.trx"
 
       - name: Publish Windows executable
         run: >-
@@ -81,9 +88,13 @@ jobs:
 
       - name: Test on native ARM64
         shell: pwsh
+        env:
+          DOTNET_CLI_UI_LANGUAGE: en-US
         run: |
           if ($env:RUNNER_ARCH -ne 'ARM64') { throw "Expected an ARM64 runner, got $env:RUNNER_ARCH." }
-          dotnet test --configuration Release --nologo
+          $info = (dotnet --info) -join " "
+          if ($info -notmatch 'Architecture:\s*arm64\b') { throw "Expected a native ARM64 .NET runtime. $info" }
+          dotnet test --configuration Release --nologo --results-directory artifacts/validation --logger "trx;LogFileName=release-win-arm64.trx"
 
       - name: Publish native ARM64 executable
         run: >-
@@ -116,5 +127,53 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: lifecycle-win-arm64
+          path: artifacts/validation/*
+          if-no-files-found: error
+
+  legacy-upgrade:
+    if: github.ref == 'refs/heads/audit/0.11.0'
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish Windows x64 candidate
+        run: >-
+          dotnet publish src/OctetLedger.Cli/OctetLedger.Cli.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=None
+          --output artifacts/win-x64
+
+      - name: Build candidate and fetch the official v0.3.0 archive
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          .\scripts\package.ps1 -Version ci-legacy-upgrade
+          gh release download v0.3.0 --repo $env:GITHUB_REPOSITORY --pattern OctetLedger-0.3.0-win-x64.zip --dir artifacts/legacy
+
+      - name: Test v0.3.0 upgrade and automatic collection
+        shell: pwsh
+        run: >-
+          .\scripts\test-legacy-upgrade.ps1
+          -LegacyPackage .\artifacts\legacy\OctetLedger-0.3.0-win-x64.zip
+          -PackagePath .\artifacts\packages\OctetLedger-ci-legacy-upgrade-win-x64.zip
+          -EvidencePath .\artifacts\validation\upgrade-from-0.3.0-win-x64.json
+
+      - name: Retain upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: upgrade-from-0.3.0-win-x64
           path: artifacts/validation/*
           if-no-files-found: error
