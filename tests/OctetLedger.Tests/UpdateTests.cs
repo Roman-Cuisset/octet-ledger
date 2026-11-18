@@ -176,14 +176,12 @@ public class UpdateTests
         if (!OperatingSystem.IsWindows()) return;
 
         var pidFile = Path.Combine(Path.GetTempPath(), $"octetledger-probe-{Guid.NewGuid():N}.pid");
-        var start = new System.Diagnostics.ProcessStartInfo("powershell.exe")
+        var start = new System.Diagnostics.ProcessStartInfo("cmd.exe")
         {
-            ArgumentList =
-            {
-                "-NoProfile", "-Command",
-                "$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 90' -NoNewWindow -PassThru; " +
-                "[IO.File]::WriteAllText($env:OCTETLEDGER_PROBE_PID, $child.Id.ToString())"
-            },
+            // START /B keeps the child's inherited pipes and lets cmd exit on hosted Windows runners.
+            Arguments = """
+                /d /c start "" /b powershell.exe -NoProfile -NonInteractive -Command "$path = $env:OCTETLEDGER_PROBE_PID; [IO.File]::WriteAllText($path + '.tmp', [string]$PID); [IO.File]::Move($path + '.tmp', $path); Start-Sleep -Seconds 90"
+                """,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -195,9 +193,12 @@ public class UpdateTests
         {
             await parent.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(45));
             Assert.Equal(0, parent.ExitCode);
+            using var startup = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            while (!File.Exists(pidFile)) await Task.Delay(50, startup.Token);
+
             var probe = UpdateInstaller.ReadProcessOutputAsync(parent, TimeSpan.FromMilliseconds(150));
-            Assert.Same(probe, await Task.WhenAny(probe, Task.Delay(TimeSpan.FromSeconds(3))));
-            await Assert.ThrowsAsync<TimeoutException>(() => probe);
+            using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            await Assert.ThrowsAsync<TimeoutException>(() => probe.WaitAsync(guard.Token));
         }
         finally
         {
@@ -212,6 +213,7 @@ public class UpdateTests
                 catch (ArgumentException) { }
                 finally { File.Delete(pidFile); }
             }
+            File.Delete(pidFile + ".tmp");
         }
     }
 
