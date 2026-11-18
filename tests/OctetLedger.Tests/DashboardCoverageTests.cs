@@ -4,6 +4,7 @@ using OctetLedger.Core;
 
 namespace OctetLedger.Tests;
 
+[Collection("Dashboard Chromium")]
 public class DashboardCoverageTests
 {
     [Theory]

@@ -3,6 +3,7 @@ using OctetLedger.Core;
 
 namespace OctetLedger.Tests;
 
+[Collection("Dashboard Chromium")]
 public class DashboardSecurityTests
 {
     [Fact]

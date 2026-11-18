@@ -36,7 +36,7 @@ internal static class DashboardBrowser
         var url = $"http://127.0.0.1:{port}/";
         listener.Prefixes.Add(url);
         listener.Start();
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var server = ServeAsync(listener, verification, JsonSerializer.SerializeToUtf8Bytes(payload), cancellation.Token);
         using var browser = new Process
         {
@@ -61,7 +61,7 @@ internal static class DashboardBrowser
             started = true;
             var output = browser.StandardOutput.ReadToEndAsync(cancellation.Token);
             var error = browser.StandardError.ReadToEndAsync(cancellation.Token);
-            await browser.WaitForExitAsync(cancellation.Token);
+            await Task.WhenAll(browser.WaitForExitAsync(cancellation.Token), output, error).WaitAsync(cancellation.Token);
             var html = await output;
             var stderr = await error;
             Assert.True(browser.ExitCode == 0, stderr);
@@ -71,17 +71,40 @@ internal static class DashboardBrowser
                 : WebUtility.HtmlDecode(html[(markerStart + marker.Length)..html.IndexOf('"', markerStart + marker.Length)]);
             Assert.True(result == "pass", result);
         }
+        catch (OperationCanceledException exception) when (cancellation.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Chromium did not finish dashboard verification in 60 seconds (viewport {viewportWidth}px).", exception);
+        }
         finally
         {
-            if (started && !browser.HasExited)
+            try
             {
-                browser.Kill(entireProcessTree: true);
-                await browser.WaitForExitAsync(CancellationToken.None);
+                if (started && !browser.HasExited)
+                {
+                    browser.Kill(entireProcessTree: true);
+                    await browser.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                }
             }
+            catch (InvalidOperationException) { }
+            catch (TimeoutException) { }
             await cancellation.CancelAsync();
             listener.Stop();
             await server;
-            Directory.Delete(directory, recursive: true);
+            await DeleteProfileAsync(directory);
+        }
+    }
+
+    private static async Task DeleteProfileAsync(string directory)
+    {
+        // A Chromium child can briefly retain profile handles after the main process exits.
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try { Directory.Delete(directory, recursive: true); return; }
+            catch (DirectoryNotFoundException) { return; }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                await Task.Delay(200);
+            }
         }
     }
 
