@@ -149,15 +149,23 @@ internal sealed partial class UpdateInstaller
             throw new InvalidDataException($"The downloaded executable does not match release {expected}.");
     }
 
+    internal static Task<(string Output, string Error)> ReadProcessOutputAsync(
+        Process process,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default) =>
+        ReadProcessOutputAsync(process, process.StandardOutput, process.StandardError, timeout, cancellationToken);
+
     internal static async Task<(string Output, string Error)> ReadProcessOutputAsync(
         Process process,
+        TextReader standardOutput,
+        TextReader standardError,
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
-        var output = process.StandardOutput.ReadToEndAsync(deadline.Token);
-        var error = process.StandardError.ReadToEndAsync(deadline.Token);
+        var output = standardOutput.ReadToEndAsync(deadline.Token);
+        var error = standardError.ReadToEndAsync(deadline.Token);
         try
         {
             await Task.WhenAll(process.WaitForExitAsync(deadline.Token), output, error).WaitAsync(deadline.Token);

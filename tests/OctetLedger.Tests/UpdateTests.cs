@@ -1,5 +1,5 @@
-using System.Globalization;
 using System.IO.Compression;
+using System.IO.Pipes;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -171,50 +171,30 @@ public class UpdateTests
     }
 
     [Fact]
-    public async Task VersionProbeTimesOutWhenChildKeepsOutputOpenAfterParentExit()
+    public async Task VersionProbeTimesOutWhenOutputPipeRemainsOpenAfterProcessExit()
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        var pidFile = Path.Combine(Path.GetTempPath(), $"octetledger-probe-{Guid.NewGuid():N}.pid");
-        var start = new System.Diagnostics.ProcessStartInfo("cmd.exe")
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe")
         {
-            // START /B keeps the child's inherited pipes and lets cmd exit on hosted Windows runners.
-            Arguments = """
-                /d /c start "" /b powershell.exe -NoProfile -NonInteractive -Command "$path = $env:OCTETLEDGER_PROBE_PID; [IO.File]::WriteAllText($path + '.tmp', [string]$PID); [IO.File]::Move($path + '.tmp', $path); Start-Sleep -Seconds 90"
-                """,
+            ArgumentList = { "/d", "/c", "exit", "0" },
             UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
             CreateNoWindow = true
-        };
-        start.Environment["OCTETLEDGER_PROBE_PID"] = pidFile;
-        using var parent = System.Diagnostics.Process.Start(start)!;
-        try
-        {
-            await parent.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(45));
-            Assert.Equal(0, parent.ExitCode);
-            using var startup = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            while (!File.Exists(pidFile)) await Task.Delay(50, startup.Token);
+        })!;
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal(0, process.ExitCode);
 
-            var probe = UpdateInstaller.ReadProcessOutputAsync(parent, TimeSpan.FromMilliseconds(150));
-            using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            await Assert.ThrowsAsync<TimeoutException>(() => probe.WaitAsync(guard.Token));
-        }
-        finally
-        {
-            if (!parent.HasExited) parent.Kill(entireProcessTree: true);
-            if (File.Exists(pidFile))
-            {
-                try
-                {
-                    using var child = System.Diagnostics.Process.GetProcessById(int.Parse(File.ReadAllText(pidFile), CultureInfo.InvariantCulture));
-                    if (!child.HasExited && child.StartTime >= parent.StartTime) child.Kill();
-                }
-                catch (ArgumentException) { }
-                finally { File.Delete(pidFile); }
-            }
-            File.Delete(pidFile + ".tmp");
-        }
+        // Keep a real output pipe open independently of the exited process.
+        var pipeName = $"octetledger-probe-{Guid.NewGuid():N}";
+        using var server = new NamedPipeServerStream(pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        using var writer = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.Asynchronous);
+        using var startup = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await Task.WhenAll(server.WaitForConnectionAsync(startup.Token), writer.ConnectAsync(startup.Token));
+        using var output = new StreamReader(server);
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+
+        var probe = UpdateInstaller.ReadProcessOutputAsync(process, output, TextReader.Null, TimeSpan.FromMilliseconds(150));
+        await Assert.ThrowsAsync<TimeoutException>(() => probe.WaitAsync(guard.Token));
     }
 
     [Fact]
