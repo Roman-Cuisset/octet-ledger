@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+
 using System.Text;
 
 namespace OctetLedger.Core;
@@ -108,7 +109,7 @@ public static class CollectorTaskManager
         // The launcher and watchdog start this file through ShellExecute (VBScript Run), which honors
         // the Windows Internet zone mark and can block invisibly. The user explicitly installs/starts
         // the collector here, so clear only that mark from the installed file.
-        ClearInternetMark(fullPath);
+        TryClearInternetMark(fullPath);
         Directory.CreateDirectory(AppDataPaths.DataDirectory);
         var temporaryLauncher = $"{LauncherPath}.tmp";
         try
@@ -173,7 +174,7 @@ public static class CollectorTaskManager
         {
             TryDeleteStopFile();
             var currentExecutable = Environment.ProcessPath;
-            if (!string.IsNullOrWhiteSpace(currentExecutable)) ClearInternetMark(currentExecutable);
+            if (!string.IsNullOrWhiteSpace(currentExecutable)) TryClearInternetMark(currentExecutable);
             Process.Start(new ProcessStartInfo("wscript.exe", $"//B //Nologo \"{LauncherPath}\"") { UseShellExecute = true })?.Dispose();
         }
         var startup = WaitForStartup(() =>
@@ -468,13 +469,48 @@ public static class CollectorTaskManager
         }
     }
 
-    /// <summary>Removes the Internet zone mark from the launched executable when Windows applies one.</summary>
-    internal static void ClearInternetMark(string executablePath)
+    /// <summary>
+    /// Removes the Internet zone mark only from the currently executing OctetLedger image.
+    /// Windows policies are untouched; arbitrary paths, other products, and files replaced after
+    /// this process started are rejected. Unsigned official builds rely on the running image
+    /// identity; publisher authenticity still requires code signing.
+    /// </summary>
+    internal static bool TryClearInternetMark(string executablePath, string? currentExecutable = null, string? productName = null)
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows()) return false;
+        var current = currentExecutable ?? Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(current) || !AreSameExecutablePath(executablePath, current)) return false;
+
         var target = ResolveFinalPath(executablePath);
-        try { File.Delete($"{target}:Zone.Identifier"); }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException) { }
+        if (!File.Exists(target)) return false;
+        if (!string.Equals(Path.GetFileName(target), "octetledger.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.Equals(productName ?? FileVersionInfo.GetVersionInfo(target).ProductName ?? "",
+                "OctetLedger", StringComparison.Ordinal)) return false;
+        if (WasReplacedAfterProcessStart(target)) return false;
+
+        try
+        {
+            File.Delete($"{target}:Zone.Identifier");
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static bool WasReplacedAfterProcessStart(string path)
+    {
+        try
+        {
+            var startUtc = Process.GetCurrentProcess().StartTime.ToUniversalTime();
+            // Allow for file-system timestamp granularity and a slow image start.
+            return File.GetLastWriteTimeUtc(path) > startUtc.AddSeconds(2);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
     }
 
     internal static string BuildLauncherScript(string executablePath)
