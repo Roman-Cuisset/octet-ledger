@@ -69,6 +69,10 @@ For a WinGet portable installation, start background collection once with:
 octetledger collector install
 ```
 
+The WinGet payload can carry a Windows Internet zone mark. `collector install` removes that mark
+from the installed executable because the hidden VBScript launcher starts it through ShellExecute;
+Windows SmartScreen and other security policies are unchanged.
+
 ## How to read the numbers
 
 OctetLedger exposes two different kinds of network data:

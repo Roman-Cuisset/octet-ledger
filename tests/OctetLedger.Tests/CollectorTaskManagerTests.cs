@@ -6,6 +6,84 @@ public class CollectorTaskManagerTests
 {
 
     [Fact]
+    public void ClearingInternetMarkRemovesOnlyTheWindowsZoneStream()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-mark-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "octetledger.exe");
+        try
+        {
+            File.WriteAllText(path, "binary");
+            File.WriteAllText($"{path}:Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3");
+            File.WriteAllText($"{path}:unrelated", "keep");
+
+            CollectorTaskManager.ClearInternetMark(path);
+
+            Assert.ThrowsAny<IOException>(() => File.ReadAllText($"{path}:Zone.Identifier"));
+            Assert.Equal("keep", File.ReadAllText($"{path}:unrelated"));
+            Assert.Equal("binary", File.ReadAllText(path));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ClearingInternetMarkFollowsAPortableAliasSymlink()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-mark-link-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var target = Path.Combine(directory, "package.exe");
+        var alias = Path.Combine(directory, "octetledger.exe");
+        try
+        {
+            File.WriteAllText(target, "binary");
+            File.WriteAllText($"{target}:Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3");
+            try { File.CreateSymbolicLink(alias, target); }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException) { return; }
+
+            CollectorTaskManager.ClearInternetMark(alias);
+
+            Assert.ThrowsAny<IOException>(() => File.ReadAllText($"{target}:Zone.Identifier"));
+            Assert.Equal("binary", File.ReadAllText(alias));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PortableAliasAndItsTargetAreTheSameExecutable()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var directory = Path.Combine(Path.GetTempPath(), $"octetledger-identity-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var target = Path.Combine(directory, "package.exe");
+        var alias = Path.Combine(directory, "octetledger.exe");
+        var other = Path.Combine(directory, "other.exe");
+        try
+        {
+            File.WriteAllText(target, "binary");
+            File.WriteAllText(other, "binary");
+            try { File.CreateSymbolicLink(alias, target); }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException) { return; }
+
+            Assert.True(CollectorTaskManager.AreSameExecutablePath(alias, target));
+            Assert.True(CollectorTaskManager.AreSameExecutablePath(alias, alias));
+            Assert.False(CollectorTaskManager.AreSameExecutablePath(alias, other));
+            Assert.False(CollectorTaskManager.AreSameExecutablePath(alias, ""));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ProcessLockCanBeReleasedFromAnotherThread()
     {
         var name = $@"Local\OctetLedger.Tests.{Guid.NewGuid():N}";

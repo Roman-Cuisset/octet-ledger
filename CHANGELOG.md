@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Collector registration for portable package managers
+
+- Clear the Windows Internet zone mark from the executable when `collector install` or `collector start` registers the collector. The hidden VBScript launcher starts it through ShellExecute, which honored the mark and blocked the worker without a log or PID; WinGet and browser downloads previously failed with `Collector could not be launched`.
+- Resolve portable package alias symlinks when comparing executable paths, so the background worker is recognized, reported ready, and waited for during stop and uninstall instead of discarding its PID file.
+- Add regressions for alternate-stream cleanup and portable alias identity.
+
 ## 0.11.0
 
 ### Security
